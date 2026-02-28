@@ -102,6 +102,9 @@ def recommend_by_leiden(
         total_min_k += c_min_k
         total_max_k += c_max_k
         
+        # 原则是每个类最好不要超过5个 metacells，否则可能过于细分
+        total_max_k = min(total_max_k, n_clusters * 5)
+        
         cluster_stats.append({
             'Cluster': c,
             'Cells': c_cells,
