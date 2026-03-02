@@ -76,7 +76,6 @@ def initialize_waypoints(hdata, seed=32, n_micro_clusters=None, ref_view_res=500
     hdata.model.initialize(seed=seed, data_type='kernel', n_micro_clusters=n_micro_clusters)
     
     # 按照您的流程，这一步直接出图确认
-    hdata.model.plot_initialization(hdata.views_umap[ref_view_res], title="Check K-Means++ Initialization")
 
 def fit(hdata, n_threads=10):
     """
@@ -113,11 +112,14 @@ def evaluate(hdata):
         raise ValueError("模型尚未拟合，请先运行 sk.tl.fit(hdata)")
         
     true_labels = hdata.obs['label'].values
-    purity_df = hdata.model.calculate_metrics(true_labels)
+    purity_df, eval_df_cache, avg_size_cache, thre_cache= hdata.model.calculate_metrics(true_labels)
     metrics_summary = hdata.model.get_metrics_summary()
     
     hdata.uns['purity_df'] = purity_df
     hdata.uns['metrics'] = metrics_summary
+    hdata.uns['eval_df_cache'] = eval_df_cache
+    hdata.uns['avg_size_cache'] = avg_size_cache
+    hdata.uns['thre_cache'] = thre_cache
     
     # ==============================================================
     # 新增：将 purity 核心指标无缝追加到现有的 hdata.metacells 中

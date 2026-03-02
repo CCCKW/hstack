@@ -79,7 +79,7 @@ class EvaluationMixin:
         self._thre_cache = thre
 
         print(f"✅ 指标计算完成！(发现 {num_unique_types} 种细胞类型)")
-        return self.purity_df_
+        return self.purity_df_, self._eval_df_cache, self._avg_size_cache, self._thre_cache
 
     def get_metrics_summary(self):
         """步骤2: 打印并返回核心评估指标数值 (纯输出，不绘图)"""
