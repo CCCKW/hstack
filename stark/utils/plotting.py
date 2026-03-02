@@ -1,9 +1,105 @@
 import numpy as np
 import matplotlib.pyplot as plt
-
+import seaborn as sns
 class PlottingMixin:
     """提供可视化功能的 Mixin 类"""
-    
+
+    def plot_basic_purity(self,figsize=(8, 6)):
+        """可视化 1: 基础纯度柱状图"""
+        if getattr(self, 'purity_df_', None) is None:
+            raise RuntimeError("数据未准备好，请先执行 model.calculate_metrics(cell_types)")
+            
+        sns.set_theme(style="whitegrid")
+        fig = plt.figure(figsize=figsize)
+        sns.barplot(x='CellType', y='CellType_purity', data=self.purity_df_)
+        plt.xticks(rotation=45)
+        plt.title('Basic Purity by Cell Type')
+        plt.tight_layout()
+        plt.show()
+
+
+
+    def plot_ep_score(self,figsize=(12, 6)):
+        """可视化 3: 最终评估得分 EP_v2 柱状图"""
+        if getattr(self, 'purity_df_', None) is None:
+            raise RuntimeError("数据未准备好，请先执行 model.calculate_metrics(cell_types)")
+            
+        sns.set_theme(style="whitegrid")
+        fig = plt.figure(figsize=figsize)
+        sns.barplot(x='CellType', y='EP_v2', data=self.purity_df_)
+        plt.xticks(rotation=45)
+        plt.title('EP v2 Score by Cell Type (Corrected & Penalized)')
+        plt.tight_layout()
+        plt.show()
+
+    def plot_umap_assignment(self, umap_coords,  figsize=(7,7)):
+        """
+        可视化 4: 单点 UMAP 散点图 (按模型分配的 Metacell ID 染色)
+        注: 该图只依赖模型结果，可在 calculate_metrics 之前调用
+        """
+        if not hasattr(self, 'labels'):
+            raise RuntimeError("未找到 self.labels，请先运行 fit() 方法完成优化。")
+            
+        sns.set_theme(style="whitegrid")
+        fig = plt.figure(figsize=figsize)
+        sns.scatterplot(x=umap_coords[:, 0], y=umap_coords[:, 1], 
+                        hue=self.labels, palette='tab20', s=5, legend=False, rasterized=True)
+        plt.title("UMAP: Metacell Assignments")
+        plt.axis('off')
+        plt.tight_layout()
+        plt.show()
+
+    def plot_umap_comparison(self, umap_coords,  figsize=(14, 6)):
+
+        """
+        可视化 5: 双点 UMAP 对比图 (左侧为预测平滑的类型，右侧为真实单细胞类型)
+        """
+        if getattr(self, '_eval_df_cache', None) is None:
+            raise RuntimeError("缺少真实标签缓存，请先执行 model.calculate_metrics(cell_types)")
+            
+        sns.set_theme(style="whitegrid")
+        fig, ax = plt.subplots(1, 2, figsize=(14, 6))
+        df = self._eval_df_cache
+        
+        # 获取所有唯一的细胞类型并排序，统一左右两图的颜色映射标准
+        unified_hue_order = sorted(df['CellType'].dropna().unique())
+        
+        # 左图：分配的 Metacell 类型
+        sns.scatterplot(x=umap_coords[:, 0], y=umap_coords[:, 1], 
+                        hue=df['meta_lb'], hue_order=unified_hue_order, 
+                        palette='tab20', s=5, ax=ax[0], legend=False, rasterized=True)
+        ax[0].set_title("UMAP: Metacell Imputed Cell Types")
+      
+        
+        # 右图：真实单细胞类型
+        sns.scatterplot(x=umap_coords[:, 0], y=umap_coords[:, 1], 
+                        hue=df['CellType'], hue_order=unified_hue_order, 
+                        palette='tab20', s=5, ax=ax[1], legend=True, rasterized=True)
+        ax[1].set_title("UMAP: Original Cell Types")
+
+        
+        # 图例放右侧防止遮挡
+        ax[1].legend(loc='center left', bbox_to_anchor=(1, 0.5), markerscale=3)
+        plt.tight_layout()
+        plt.show()
+    def plot_metacell_sizes(self, figsize=(8, 6), bins=20):
+        """可视化 2: Metacell 大小分布直方图"""
+        if getattr(self, 'purity_df_', None) is None:
+            raise RuntimeError("数据未准备好，请先执行 model.calculate_metrics(cell_types)")
+            
+        sns.set_theme(style="whitegrid")
+        plt.figure(figsize=figsize)
+        plt.hist(self.purity_df_['cell_num'], bins=bins, color='skyblue', edgecolor='black')
+        plt.axvline(self._avg_size_cache, color='r', linestyle='dashed', linewidth=1.5, label=f'Mean ({self._avg_size_cache:.1f})')
+        plt.axvline(self._thre_cache, color='orange', linestyle='dashed', linewidth=1.5, label=f'Threshold ({self._thre_cache:.1f})')
+        plt.title('Distribution of Metacell Sizes')
+        plt.xlabel('Number of Cells')
+        plt.ylabel('Frequency')
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+        
+        
     def plot_initialization(self, umap_coords, title="Initialization Waypoints"):
         if not getattr(self, 'initialized', False): 
             raise RuntimeError("请先运行 initialize")
