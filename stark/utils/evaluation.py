@@ -83,9 +83,7 @@ class EvaluationMixin:
 
     def get_metrics_summary(self):
         """步骤2: 打印并返回核心评估指标数值 (纯输出，不绘图)"""
-        if getattr(self, 'global_score_', None) is None:
-            raise RuntimeError("数据未计算！请先执行 model.calculate_metrics(cell_types)")
-            
+
         print("-" * 40)
         print(f"简单平均纯度 (Mean Purity)  : {self.mean_purity_:.4f}")
         print(f"模型准确率 (Accuracy)      : {self.accuracy_:.4f}")

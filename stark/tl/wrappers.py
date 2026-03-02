@@ -1,7 +1,7 @@
 from ..utils.rec_num import recommend_by_leiden
 from ..utils.model import MultiViewSEACells  
 import numpy as np
-
+import pandas as pd
 
 
 def recommend_metacell_num(hdata, target_depth_min=20*1e6, target_depth_max=40*1e6, resolution_param=2.0, n_neighbors=15, ref_view=1000000):
@@ -102,24 +102,108 @@ def fit(hdata, n_threads=10):
         
     hdata.metacells = meta_stats
     print("✅ 模型拟合完成，Metacell 标签已保存，基础属性(深度、组成等)已初始化至 hdata.metacells。")
+    
+    
+def calculate_metrics(hdata, cell_types):
+        """
+        步骤1: 计算核心评估指标，并将其缓存为模型属性 (纯计算，不绘图)
+        
+        参数:
+        - cell_types: array-like, 细胞的真实类型标签
+        
+        返回:
+        - purity_df: 包含各项纯度和大小评估指标的 DataFrame
+        """
+
+        print("\n" + "=" * 60)
+        print("正在计算评估指标...")
+        print("=" * 60)
+        labels = hdata.obs['metacell'].values
+        # 整理基础 DataFrame
+        df = pd.DataFrame({'CellType': cell_types, 'Metacell': labels})
+        
+        def celltype_frac(x):
+            val_counts = x['CellType'].value_counts()
+            return val_counts.values[0] / val_counts.values.sum()
+            
+        def dominant_celltype(x):
+            return x['CellType'].value_counts().index[0]
+
+        # 聚合计算
+        celltype_fraction = df.groupby("Metacell").apply(celltype_frac)
+        celltype_dom = df.groupby("Metacell").apply(dominant_celltype)
+        cell_num = df.groupby("Metacell").count()['CellType']
+
+        purity = pd.concat([celltype_dom, celltype_fraction, cell_num], axis=1)
+        purity.columns = ['CellType', 'CellType_purity', 'cell_num']
+
+        # 动态计算惩罚因子与基线调整
+        avg_size = purity['cell_num'].mean()
+        thre = 2 * avg_size
+        
+        # 1. 过小惩罚
+        purity['w_min'] = 1 - (1 / np.sqrt(purity['cell_num']))
+        purity.loc[purity['cell_num'] == 1, 'w_min'] = 0.0 # 处理特例
+        
+        # 2. 过大惩罚
+        excess_ratio = (purity['cell_num'] - thre) / avg_size
+        excess_ratio = excess_ratio.clip(lower=0) 
+        purity['w_max'] = 1 / (1 + excess_ratio)
+        
+        # 3. 机会校正基线
+        num_unique_types = df['CellType'].nunique()
+        baseline = 1.0 / num_unique_types
+        purity['P_adj'] = (purity['CellType_purity'] - baseline) / (1 - baseline)
+        purity['P_adj'] = purity['P_adj'].clip(lower=0)
+        
+        # 4. 最终核心 EP_v2
+        purity['EP_v2'] = purity['P_adj'] * purity['w_min'] * purity['w_max']
+        
+        # 记录内部属性
+        mean_purity_ = purity['CellType_purity'].mean()
+        global_score_ = (purity['EP_v2'] * purity['cell_num']).sum() / purity['cell_num'].sum()
+        
+        # 计算 Accuracy 并映射标签以便画图
+        hash_meta = purity['CellType'].to_dict()
+        df['meta_lb'] = df['Metacell'].map(hash_meta)
+        accuracy_ = (df['CellType'] == df['meta_lb']).sum() / df.shape[0]
+
+  
+        print(f"✅ 指标计算完成！(发现 {num_unique_types} 种细胞类型)")
+        return purity, df, avg_size, thre
 
 
-def evaluate(hdata):
+def evaluate(hdata, true_labels ):
     """
     步骤 9: 评估模型并计算纯度
     """
-    if hdata.model is None or 'metacell' not in hdata.obs:
-        raise ValueError("模型尚未拟合，请先运行 sk.tl.fit(hdata)")
+
         
-    true_labels = hdata.obs['label'].values
-    purity_df, eval_df_cache, avg_size_cache, thre_cache= hdata.model.calculate_metrics(true_labels)
-    metrics_summary = hdata.model.get_metrics_summary()
+    purity_df, eval_df_cache, avg_size_cache, thre_cache= calculate_metrics(hdata, true_labels)
+    accuracy = (eval_df_cache['CellType'] == eval_df_cache['meta_lb']).sum() / eval_df_cache.shape[0]
+    global_score = (purity_df['EP_v2'] * purity_df['cell_num']).sum() / purity_df['cell_num'].sum()
+    print("-" * 40)
+    print(f"简单平均纯度 (Mean Purity)  : {purity_df['CellType_purity'].mean():.4f}")
+    print(f"模型准确率 (Accuracy)      : {accuracy:.4f}")
+    print(f"全局加权分 (Global Score)  : {global_score:.4f}")
+    print("-" * 40)
+        
+    metrics_summary = {
+            'mean_purity': purity_df['CellType_purity'].mean(),
+            'accuracy': accuracy,
+            'global_score': global_score
+        }
+
+
     
     hdata.uns['purity_df'] = purity_df
     hdata.uns['metrics'] = metrics_summary
     hdata.uns['eval_df_cache'] = eval_df_cache
     hdata.uns['avg_size_cache'] = avg_size_cache
     hdata.uns['thre_cache'] = thre_cache
+    hdata.uns['accuracy'] = accuracy
+    hdata.uns['global_score'] = global_score
+    
     
     # ==============================================================
     # 新增：将 purity 核心指标无缝追加到现有的 hdata.metacells 中
