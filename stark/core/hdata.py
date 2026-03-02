@@ -50,6 +50,10 @@ class HData:
         descr = f"HData object with {self.n_cells} cells and {self.n_metacells} metacells\n"
         descr += f"    resolutions: {self.resolutions}\n"
         descr += f"    obs: {list(self.obs.columns)}\n"
+        descr += f"    views_pca: {list(self.views_pca.keys())}\n"
+        descr += f"    views_umap: {list(self.views_umap.keys())}\n"
+        descr += f"    views_embedding: {list(self.views_embedding.keys())}\n"
+        descr += f"    uns keys: {list(self.uns.keys())}\n"
         
         # 打印 Metacell 信息
         if self.n_metacells > 0:
