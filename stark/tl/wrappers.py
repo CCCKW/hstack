@@ -211,6 +211,9 @@ def evaluate(hdata, true_labels ):
     # 过滤掉与基础属性重复的列 (cell_num 对应 cell_count, CellType 对应 dominant_label)
     cols_to_add = [c for c in purity_df.columns if c not in ['CellType', 'cell_num']]
     
+    if 'hdata.metacells' not in hdata.__dict__ or hdata.metacells.empty:
+        hdata.metacells = purity_df.copy()
+    
     if hdata.metacells.empty:
         hdata.metacells = purity_df.copy() # 防御性编程：如果用户没正常走 fit
     else:
