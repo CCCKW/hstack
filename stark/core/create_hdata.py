@@ -35,8 +35,8 @@ def create_hdata_from_adata(adata,
         resolutions=resolution
     )
     
-    hdata.views_pca[resolution] = adata.obsm.get('X_pca', None)
-    hdata.views_umap[resolution] = adata.obsm.get('X_umap', None)
+    hdata.views_pca[resolution] = adata.uns.get('X_pca', None)
+    hdata.views_umap[resolution] = adata.uns.get('X_umap', None)
     
     hdata.obs = adata.obs.copy()
 

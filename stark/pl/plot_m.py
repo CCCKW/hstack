@@ -160,13 +160,14 @@ def plot_umap_comparison(hdata, resolution=None,  figsize=(14, 6)):
             raise ValueError("请提供 resolution 参数以获取对应的 UMAP 坐标")
 
         umap_coords = hdata.views_umap[resolution]
+        
         sns.set_theme(style="whitegrid")
         fig, ax = plt.subplots(1, 2, figsize=figsize)
         df = hdata.uns['eval_df_cache']
         
         # 获取所有唯一的细胞类型并排序，统一左右两图的颜色映射标准
         unified_hue_order = sorted(df['CellType'].dropna().unique())
-        
+   
         # 左图：分配的 Metacell 类型
         sns.scatterplot(x=umap_coords[:, 0], y=umap_coords[:, 1], 
                         hue=df['meta_lb'], hue_order=unified_hue_order, 

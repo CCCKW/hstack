@@ -12,7 +12,14 @@ except:
 import argparse
 import resource
 from scipy.sparse import csr_matrix
-from scipy.sparse.csr import get_csr_submatrix
+# 修改后
+try:
+    from scipy.sparse._sparsetools import get_csr_submatrix
+except ImportError:
+    # 兼容更高版本的 scipy，如果该函数已不再需要，可尝试根据报错位置进行逻辑重写
+    # 或者在某些版本中尝试：
+    from scipy.sparse.csr import csr_matrix
+    # 注意：get_csr_submatrix 通常是内部函数，直接调用切片操作 adata.X[i:j] 往往能达到同样效果
 from sklearn.preprocessing import StandardScaler
 import pickle
 import subprocess
