@@ -52,7 +52,8 @@ def main():
         M = model.kernel_matrix
         model.initialize_archetypes()
         model.fit(min_iter=10, max_iter=200)
-        
+        adata.obs['metacell'] = adata.obs['SEACell'].apply(lambda x: int(x.split('-')[1]))
+
         adata.obs.columns = ['label','SEAcell', 'metacell']
         adata.uns['X_pca'] = pca_vec    
         adata.uns['X_umap'] = umap_vec

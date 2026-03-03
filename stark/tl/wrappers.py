@@ -259,7 +259,9 @@ def evaluate(hdata, true_labels ):
     metrics_summary = {
             'mean_purity': purity_df['CellType_purity'].mean(),
             'accuracy': accuracy,
-            'global_score': global_score
+            'global_score': global_score,
+            'WCOS': wcos,
+            'HWIS': hwis
         }
 
 
