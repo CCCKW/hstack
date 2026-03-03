@@ -3,6 +3,68 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+def calculate_overmerging_metrics(cell_to_metacell, true_labels):
+    """
+    评估 Metacell 划分中是否出现“巨大且不纯”的过度融合现象 (Over-merging / Hub effect)。
+    
+    参数:
+    cell_to_metacell (array-like): 长度为 N 的数组，记录每个单细胞被分配到的 metacell ID。
+    true_labels (array-like): 长度为 N 的数组，记录每个单细胞的真实细胞类型 (Ground truth)。
+    
+    返回:
+    dict: 包含 WCOS 和 HWIS 两个 [0, 1] 之间的指标。值越接近 1 越好，越接近 0 问题越严重。
+    """
+    df = pd.DataFrame({
+        'metacell_id': cell_to_metacell,
+        'true_label': true_labels
+    })
+    
+    total_cells = len(df)
+    
+    # 用于记录每个 metacell 的惩罚值
+    penalties = []
+    squared_penalties = []
+    
+    # 遍历每一个 metacell
+    for mc_id, group in df.groupby('metacell_id'):
+        size = len(group)
+        size_fraction = size / total_cells  # 该 metacell 占总数据的比例 (0 到 1)
+        
+        # 计算该 metacell 的纯度 (Purity)
+        # 纯度 = 该 metacell 中数量最多的真实细胞类型的占比
+        mode_count = group['true_label'].value_counts().iloc[0]
+        purity = mode_count / size
+        impurity = 1.0 - purity  # 不纯度 (0 到 1)
+        
+        # 计算惩罚项
+        penalty = size_fraction * impurity
+        squared_penalty = (size_fraction ** 2) * impurity
+        
+        penalties.append(penalty)
+        squared_penalties.append(squared_penalty)
+        
+    # ---------------------------------------------------------
+    # 指标 1: WCOS (Worst-Case Overmerging Score)
+    # 专注于最糟糕的那单个 metacell。寻找 (尺寸最大且最不纯) 的极端值。
+    # 如果有一个 300/700 的 metacell，纯度只有 0.2，那么 penalty = (300/700) * 0.8 ≈ 0.34
+    # WCOS = 1 - 0.34 = 0.66 (显著下降)
+    # ---------------------------------------------------------
+    max_penalty = np.max(penalties) if penalties else 0
+    wcos = 1.0 - max_penalty
+    
+    # ---------------------------------------------------------
+    # 指标 2: HWIS (Hub-Weighted Impurity Score)
+    # 评估全局的健康度。利用平方操作严厉惩罚尺寸分布的不均（大尺寸的权重被指数级放大）。
+    # 这个指标能很好地反映出算法是否在依赖几个“垃圾桶” metacell 来吸收难以分类的细胞。
+    # ---------------------------------------------------------
+    agg_squared_penalty = np.sum(squared_penalties) if squared_penalties else 0
+    hwis = 1.0 - agg_squared_penalty
+    
+    return {
+        "WCOS": float(wcos),
+        "HWIS": float(hwis)
+    }
+
 class EvaluationMixin:
     """提供模型综合评估和对应可视化功能的 Mixin 类 (完全解耦，支持分步调用)"""
 
@@ -25,6 +87,11 @@ class EvaluationMixin:
 
         # 整理基础 DataFrame
         df = pd.DataFrame({'CellType': cell_types, 'Metacell': self.labels})
+        
+        over_merge = calculate_overmerging_metrics(df['Metacell'], df['CellType'])
+        
+        wcos = over_merge['WCOS']
+        hwis = over_merge['HWIS']
         
         def celltype_frac(x):
             val_counts = x['CellType'].value_counts()
@@ -88,6 +155,7 @@ class EvaluationMixin:
         print(f"简单平均纯度 (Mean Purity)  : {self.mean_purity_:.4f}")
         print(f"模型准确率 (Accuracy)      : {self.accuracy_:.4f}")
         print(f"全局加权分 (Global Score)  : {self.global_score_:.4f}")
+        print()
         print("-" * 40)
         
         return {

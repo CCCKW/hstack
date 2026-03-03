@@ -18,7 +18,7 @@ from .evaluation import EvaluationMixin
 
 
 
-class MultiViewSEACells(EvaluationMixin):  
+class MultiViewSEACells():  
     """
     多视图 SEACells 联合优化模型 (内置图构建，移除对第三方 SEACells 的显式依赖)
     融合了完整的评估体系 (EvaluationMixin) 与可视化功能 (PlottingMixin)
