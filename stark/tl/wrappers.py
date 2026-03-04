@@ -2,6 +2,7 @@ from ..utils.rec_num import recommend_by_leiden
 from ..utils.model import MultiViewSEACells  
 import numpy as np
 import pandas as pd
+from sklearn.preprocessing import normalize
 def calculate_overmerging_metrics(cell_to_metacell, true_labels):
     """
     评估 Metacell 划分中是否出现“巨大且不纯”的过度融合现象 (Over-merging / Hub effect)。
@@ -114,11 +115,8 @@ def compute_kernels(hdata):
     if hdata.model is None:
         raise ValueError("模型尚未初始化，请先运行 sk.tl.init_model(hdata, ...)")
         
-    pca_list = [
-        hdata.views_pca[100000],   # view1_pca
-        hdata.views_pca[500000],   # view2_pca
-        hdata.views_pca[1000000]   # view3_pca
-    ]
+    pca_list = list(hdata.views_pca.values())
+    pca_list = [ normalize(pca, norm='l2', axis=1) for pca in pca_list ]
     
     # 完全调用底层的核矩阵计算
     hdata.model.compute_kernels(pca_list, save_dir=None)
@@ -294,6 +292,3 @@ def evaluate(hdata, true_labels ):
             
     print("✅ 评估指标计算完成，纯度得分(EP_v2等)已同步至 hdata.metacells。")
     return purity_df, metrics_summary
-
-
-

@@ -13,12 +13,13 @@ class HData:
         self.output_dir = output_dir
         self.genome_reference_path = genome_reference_path
         self.chrom_list = chrom_list if chrom_list is not None else []
-        self.resolutions = resolutions if resolutions is not None else []
+        self.resolutions = sorted(resolutions) 
         
         # --- 单细胞层次数据 ---
         self.views_pca = {}
         self.views_umap = {}
         self.views_embedding = {}
+        self.views_mat = {}
         self.obs = pd.DataFrame() 
         
         # --- Metacell 层次数据 (新增) ---
@@ -53,6 +54,7 @@ class HData:
         descr += f"    views_pca: {list(self.views_pca.keys())}\n"
         descr += f"    views_umap: {list(self.views_umap.keys())}\n"
         descr += f"    views_embedding: {list(self.views_embedding.keys())}\n"
+        descr += f"    views_mat: {list(self.views_mat.keys())}\n"
         descr += f"    uns keys: {list(self.uns.keys())}\n"
         
         # 打印 Metacell 信息

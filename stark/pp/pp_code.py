@@ -81,16 +81,20 @@ def stark_process(output_dir,
             files_to_process.append(pair_path)
             
     # 2. 并行计算行数，executor.map 会自动保证输出结果列表与输入列表顺序严格一致
-    depth = []
-    if files_to_process:
-        # 使用你传入的 cpu_num 控制并发数
-        with concurrent.futures.ProcessPoolExecutor(max_workers=cpu_num) as executor:
-            depth = list(executor.map(count_valid_lines, files_to_process))
-            
-    # 3. 写入文件
-    with open(depth_output_path, "w") as f:
-        for d in depth:
-            f.write(f"{d}\n")
+    if not os.path.exists(depth_output_path):
+        depth = []
+        if files_to_process:
+            # 使用你传入的 cpu_num 控制并发数
+            with concurrent.futures.ProcessPoolExecutor(max_workers=cpu_num) as executor:
+                depth = list(executor.map(count_valid_lines, files_to_process))
+                
+        # 3. 写入文件
+        with open(depth_output_path, "w") as f:
+            for d in depth:
+                f.write(f"{d}\n")
+    else:
+        print("Depth file already exists. Skipping depth calculation.")
+        depth = pd.read_csv(depth_output_path, header=None)[0].values.tolist()
             
     print('====== depth calculation completed =======')
     
