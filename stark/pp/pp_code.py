@@ -49,7 +49,7 @@ def load_data(file_path, n_chrom=19, n_components=0.75, random_state=42, scaler_
     if np.min(embedding) < 0:
         embedding += np.abs(np.min(embedding))
         
-    pca_vec = normalize(pca_vec, norm='l2', axis=1)
+    # pca_vec = normalize(pca_vec, norm='l2', axis=1)
     
     return pca_vec, umap_vec, embedding
 

@@ -6,3 +6,4 @@ __pycache__/
 .pairs
 result.npy
 test_output/
+test_output2/
