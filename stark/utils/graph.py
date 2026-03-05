@@ -37,7 +37,7 @@ class SEACellGraph:
         self.M = None  
         self.verbose = verbose
 
-    def rbf(self, k: int = 15, graph_construction="union"):
+    def rbf(self, k: int = 15, graph_construction="intersection"):
         """初始化自适应带宽 RBF 核"""
         if self.verbose:
             print("正在使用 Scanpy 计算 kNN 图 ...")

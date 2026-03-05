@@ -211,7 +211,7 @@ class MultiViewSEACells():
                 )
                 losses.append(loss)
                 sizes = self.A.sum(axis=1)
-                print(f"Iter {iteration:3d} | Loss: {loss:.4f} | Size Range: {sizes.min():.1f}-{sizes.max():.1f}")
+                print(f"Iter {iteration:3d} | Loss: {loss:.4f} | Size Range: {sizes.min():.1f}-{sizes.max():.1f} | weight: {self.view_weights} ")
 
             if self.adaptive_weight and iteration > 0:
                 self.view_weights = self._update_weights_consensus(
