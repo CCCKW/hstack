@@ -93,13 +93,7 @@ def init_model(hdata, n_metacells, **kwargs):
     """
     # 保留您在 pipe.py 中的默认参数
     default_params = {
-        'lambda_sparse': 0.0000,
-        'lambda_balance': 0.01,
-        'lambda_consistency': 0.001,
-        'max_iter': 100,
-        'min_size_threshold': 0.002,
-        'respawn_interval': 10,
-        'split_metric': 'pca'
+       
     }
     default_params.update(kwargs)
     
