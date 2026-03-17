@@ -115,7 +115,7 @@ def compute_kernels(hdata):
     # 完全调用底层的核矩阵计算
     hdata.model.compute_kernels(pca_list, save_dir=None)
 
-def initialize_waypoints(hdata, seed=32, n_micro_clusters=None, ref_view_res=500000):
+def initialize_waypoints(hdata, data_type='pca', seed=32, n_micro_clusters=None, ref_view_res=500000):
     """
     步骤 5: 模型 initialize + 顺带调用其可视化确认 waypoint
     """
@@ -126,7 +126,7 @@ def initialize_waypoints(hdata, seed=32, n_micro_clusters=None, ref_view_res=500
         n_micro_clusters = hdata.model.n_metacells
         
     # 调用底层 initialize
-    hdata.model.initialize(seed=seed, data_type='kernel', n_micro_clusters=n_micro_clusters)
+    hdata.model.initialize(seed=seed, data_type= data_type, n_micro_clusters=n_micro_clusters)
     
     # 按照您的流程，这一步直接出图确认
 
