@@ -80,32 +80,22 @@ class MultiViewSEACells():
         for i, view in enumerate(views_data):
             loaded_from_cache = False
             cache_path = None
-            if save_dir:
-                cache_path = os.path.join(save_dir, f'kernel_view_{i}.npz')
-                if os.path.exists(cache_path):
-                    print(f"  [View {i}] 发现缓存，正在读取: {cache_path}")
-                    try:
-                        M = load_npz(cache_path)
-                        if M.shape[0] != self.n_cells or M.shape[1] != self.n_cells:
-                            print(f"  [警告] 缓存维度 {M.shape} 不匹配，将重新计算。")
-                        else:
-                            loaded_from_cache = True
-                            print(f"  [View {i}] 缓存加载成功。")
-                    except Exception as e:
-                        print(f"  [警告] 缓存读取失败: {e}，将重新计算。")
+        
             
-            if not loaded_from_cache:
-                print(f"  [View {i}] 开始内部计算 RBF 核矩阵 (Input: {view.shape})...")
-                tmp = ad.AnnData(view)
-                tmp.obsm['X_pca'] = view
-                
-                # 直接使用内置的 SEACellGraph，替代原版第三方包调用
-                kernel_model = SEACellGraph(tmp, build_on='X_pca', verbose=False)
-                M = kernel_model.rbf(k=self.n_neighbors, graph_construction='union')
-                
-                if save_dir and cache_path:
-                    print(f"  [View {i}] 正在写入缓存...")
-                    save_npz(cache_path, M)
+          
+            print(f"  [View {i}] 开始内部计算 RBF 核矩阵 (Input: {view.shape})...")
+            view = normalize(view, norm='l2', axis=1)
+            tmp = ad.AnnData(view)
+            
+            tmp.obsm['X_pca'] = view
+            
+            # 直接使用内置的 SEACellGraph，替代原版第三方包调用
+            kernel_model = SEACellGraph(tmp, build_on='X_pca', verbose=False)
+            M = kernel_model.rbf(k=self.n_neighbors, graph_construction='union')
+            
+            if save_dir and cache_path:
+                print(f"  [View {i}] 正在写入缓存...")
+                save_npz(cache_path, M)
             
             self.kernels.append(M)
             norm_sq = sparse_norm(M)**2

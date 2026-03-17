@@ -27,6 +27,8 @@ def create_hdata_from_adata(adata,
     if resolution is None or not resolution:
         raise ValueError("分辨率列表 (resolutions) 不能为空")
     
+    
+    
     hdata = HData(
         data_dir=data_dir,
         output_dir=output_dir,
@@ -34,9 +36,11 @@ def create_hdata_from_adata(adata,
         chrom_list=chrom_list,
         resolutions=resolution
     )
+    if isinstance(resolution, list):
+        res = resolution[0]
     
-    hdata.views_pca[resolution] = adata.uns.get('X_pca', None)
-    hdata.views_umap[resolution] = adata.uns.get('X_umap', None)
+    hdata.views_pca[res] = adata.uns.get('X_pca', None)
+    hdata.views_umap[res] = adata.uns.get('X_umap', None)
     
     hdata.obs = adata.obs.copy()
 
