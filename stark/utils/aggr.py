@@ -207,3 +207,65 @@ def aggregate_metacell_pairs(hdata, n_jobs=10, force_aggregate=False,
             json.dump(current_state, f, indent=4)
 
     if verbose: print(f"\n✅ 聚合流程完成。Metacell 文件路径与信息已存入 hdata。\n{hdata}")
+
+def aggregate_metacell_mat(hdata, force_aggregate=False, verbose=True):
+    """
+    直接从 hdata.views_mat 中批量合并所有已初始化分辨率的单细胞稀疏矩阵，生成 Metacell 级别的稀疏矩阵。
+    独立于 pairs 聚合流程，生成的结果将储存在 hdata.metacell_data['mat'][str(resolution)] 中。
+    运行完毕后将打印可供 base_on='mat' 可视化的分辨率列表。
+    """
+    if 'metacell' not in hdata.obs:
+        raise ValueError("hdata.obs 中未发现 'metacell' 标签。请确保已运行拟合步骤。")
+
+    if not hdata.views_mat:
+        raise ValueError("hdata.views_mat 为空，请先运行 sk.pp.process_and_load。")
+
+    if 'mat' not in hdata.metacell_data:
+        hdata.metacell_data['mat'] = {}
+
+    metacell_groups = hdata.obs.groupby('metacell').groups
+    chrom_list = hdata.chrom_list
+
+    # 预计算位置索引（与分辨率无关，只算一次）
+    pos_idx_map = {
+        m_id: [hdata.obs.index.get_loc(idx) for idx in indices_list]
+        for m_id, indices_list in metacell_groups.items()
+    }
+
+    completed_resolutions = []
+
+    for resolution, mat_dict in hdata.views_mat.items():
+        str_res = str(resolution)
+
+        if str_res in hdata.metacell_data['mat'] and not force_aggregate:
+            if verbose:
+                print(f"⏭️  分辨率 {resolution} 已存在聚合结果，跳过 (使用 force_aggregate=True 强制重跑)。")
+            completed_resolutions.append(resolution)
+            continue
+
+        # 校验染色体完整性
+        missing = [c for c in chrom_list if c not in mat_dict]
+        if missing:
+            print(f"⚠️  分辨率 {resolution} 缺少染色体 {missing} 的矩阵数据，跳过该分辨率。")
+            continue
+
+        hdata.metacell_data['mat'][str_res] = {}
+        all_res_dict = hdata.metacell_data['mat'][str_res]
+
+        for m_id, pos_indices in tqdm(pos_idx_map.items(), desc=f"Aggregating @ {resolution}"):
+            m_id_dict = {}
+            for chrom in chrom_list:
+                chrom_mats = mat_dict[chrom]
+                sum_mat = chrom_mats[pos_indices[0]].copy()
+                for idx in pos_indices[1:]:
+                    sum_mat += chrom_mats[idx]
+                m_id_dict[chrom] = sum_mat
+            all_res_dict[m_id] = m_id_dict
+
+        completed_resolutions.append(resolution)
+
+    if verbose:
+        print(f"\n✅ 全量聚合完成！")
+        print(f"   可通过 base_on='mat' 方式可视化的分辨率: {sorted(completed_resolutions)}")
+        if completed_resolutions:
+            print(f"   调用示例: sk.pl.plot_metacell_heatmap(hdata, ..., resolution={sorted(completed_resolutions)[0]}, base_on='mat')")

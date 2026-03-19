@@ -20,6 +20,7 @@ class HData:
         self.views_umap = {}
         self.views_embedding = {}
         self.views_mat = {}
+        self.views_is = {}
         self.obs = pd.DataFrame() 
         
         # --- Metacell 层次数据 (新增) ---
@@ -55,6 +56,7 @@ class HData:
         descr += f"    views_umap: {list(self.views_umap.keys())}\n"
         descr += f"    views_embedding: {list(self.views_embedding.keys())}\n"
         descr += f"    views_mat: {list(self.views_mat.keys())}\n"
+        descr += f"    views_is: {list(self.views_is.keys())}\n"
         descr += f"    uns keys: {list(self.uns.keys())}\n"
         
         # 打印 Metacell 信息

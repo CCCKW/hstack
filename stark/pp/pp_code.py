@@ -44,7 +44,7 @@ def load_data(file_path, n_chrom=19, n_components=0.75, random_state=42, scaler_
         embedding = data
     pca= PCA(n_components=n_components, random_state=random_state)
     pca_vec = pca.fit_transform(embedding)
-    umap_model = UMAP(random_state=random_state)
+    umap_model = UMAP(random_state=random_state,min_dist=1)
     umap_vec  = umap_model.fit_transform(pca_vec)
     if np.min(embedding) < 0:
         embedding += np.abs(np.min(embedding))
@@ -64,10 +64,6 @@ def stark_process(output_dir,
     
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    temp_dir = output_dir + "/temp"
-    if not os.path.exists(temp_dir):
-        os.makedirs(temp_dir, exist_ok=True)
-    
     
     print('====== calculating depth =======')
     # depth
@@ -109,9 +105,13 @@ def stark_process(output_dir,
                 continue
           
             
+            temp_dir = os.path.join(output_dir, f"temp_{temp_res}")
+            if not os.path.exists(temp_dir):
+                os.makedirs(temp_dir, exist_ok=True)
+                
             config = {
                 "data_dir": data_dir,
-                    "temp_dir": output_dir,
+                    "temp_dir": temp_dir,
                     "structured": True,
                     "input_format": "higashi_v2",
                     "header_included": True,
@@ -128,8 +128,6 @@ def stark_process(output_dir,
                     "gpu_num": gpu_num,
                     
             }
-            
-            config["temp_dir"] = temp_dir
             
             
             model = Higashi(config)
@@ -153,17 +151,15 @@ def stark_process(output_dir,
             np.save(embedding_output_path, embedding_vec)
             print('====== Saving completed =======')
             
-
-            shutil.rmtree(temp_dir)
-            
-            
-            
-            
     else:
         
+        temp_dir = os.path.join(output_dir, f"temp_{resolution}")
+        if not os.path.exists(temp_dir):
+            os.makedirs(temp_dir, exist_ok=True)
+            
         config = {
             "data_dir": data_dir,
-                "temp_dir": output_dir,
+                "temp_dir": temp_dir,
                 "structured": True,
                 "input_format": "higashi_v2",
                 "header_included": True,
@@ -180,8 +176,6 @@ def stark_process(output_dir,
                 "gpu_num": gpu_num,
                 
         }
-        
-        config["temp_dir"] = temp_dir
         
         
         model = Higashi(config)
@@ -201,12 +195,6 @@ def stark_process(output_dir,
         np.save(umap_output_path, umap_vec)
         np.save(embedding_output_path, embedding_vec)
         print('====== Saving completed =======')
-        
-
-        shutil.rmtree(temp_dir)
-
-    
-    
 
 if __name__ == "__main__":
 

@@ -134,29 +134,29 @@ def fit(hdata, n_threads=10):
     """
     步骤 6: 进行模型拟合，并将结果（metacell 分配标签）持久化存回 HData.obs
     同时初始化 Metacell 的基础统计属性。
+    Metacell ID 从 1 开始编号。
     """
     if hdata.model is None:
-        raise ValueError("模型尚未初始化")
-        
+        raise ValueError("模型尚未初始化，请先运行 sk.tl.init_model(hdata, ...)")
+
     hdata.model.fit(n_threads=n_threads)
-    hdata.obs['metacell'] = hdata.model.labels
-    
-    # ==============================================================
-    # 新增：在获取 metacell 标签后，立刻初始化 hdata.metacells 基础表
-    # ==============================================================
+    # ID 从 1 开始：原始 labels 是 0-indexed，整体 +1
+    hdata.obs['metacell'] = hdata.model.labels + 1
+
+    # 初始化 hdata.metacells 基础统计表
     meta_stats = hdata.obs.groupby('metacell').agg({
         'depth': ['sum', 'count', 'mean']
     })
     meta_stats.columns = ['total_depth', 'cell_count', 'mean_depth']
-    
+
     if 'label' in hdata.obs.columns:
         def get_dominant(x): return x.value_counts().index[0]
         meta_stats['dominant_label'] = hdata.obs.groupby('metacell')['label'].apply(get_dominant)
-        
+
     hdata.metacells = meta_stats
-    print("✅ 模型拟合完成，Metacell 标签已保存，基础属性(深度、组成等)已初始化至 hdata.metacells。")
-    
-    
+    print("✅ 模型拟合完成，Metacell 标签（1起编号）已保存，基础属性(深度、组成等)已初始化至 hdata.metacells。")
+
+
 def calculate_metrics(hdata, cell_types):
         """
         步骤1: 计算核心评估指标，并将其缓存为模型属性 (纯计算，不绘图)
