@@ -25,8 +25,9 @@ def _numba_update_A_incremental(A, G_recon, T1, T2, lambda_sparse, lambda_balanc
             min_val = np.inf
             min_idx = -1
             for k in range(K):
-                # 计算梯度：重构误差梯度 + 稀疏正则 + 平衡正则梯度
-                bal_grad = lambda_balance * (current_sizes[k] - avg_size)
+                # 一侧惩罚：如果 size 小于 avg_size，不强制它变大，这能极大保护稀有细胞不被强行塞入无关细胞
+                diff = current_sizes[k] - avg_size
+                bal_grad = lambda_balance * diff if diff > 0 else 0.0
                 val = G_recon[k, j] + lambda_sparse + bal_grad
                 if val < min_val:
                     min_val = val

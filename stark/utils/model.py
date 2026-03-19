@@ -99,9 +99,6 @@ class MultiViewSEACells():
             norm_sq = sparse_norm(M) ** 2
             self.kernel_norms_sq.append(norm_sq)
 
-            sparsity = (M.toarray() > 0).sum() / M.size if M.shape[0] < 5000 else 'Large Sparse'
-            print(f"  -> 核矩阵就绪: Shape={M.shape}, Sparsity={sparsity}")
-
         self.kernels_computed = True
         return self
 
@@ -128,7 +125,7 @@ class MultiViewSEACells():
         cluster_data = np.hstack(self.views_data)
 
         if n_micro_clusters is None:
-            n_micro_clusters = int(self.n_metacells * 2.0)
+            n_micro_clusters = int(self.n_metacells * 3.0)
 
         print(f"  执行 MiniBatchKMeans (k={n_micro_clusters})...")
         kmeans = MiniBatchKMeans(
@@ -143,16 +140,35 @@ class MultiViewSEACells():
 
         df_micro = pd.DataFrame({'label': micro_labels})
         size_stats = df_micro['label'].value_counts()
-        min_micro_size = max(5, int(self.n_cells * 0.0005))
+        min_micro_size = max(2, int(self.n_cells * 0.0005))
         valid_labels = size_stats[size_stats >= min_micro_size].index.tolist()
 
         if len(valid_labels) < self.n_metacells:
-            print("  [警告] 有效微簇少于目标数，强制使用最大的簇。")
-            valid_labels = size_stats.index.tolist()[:self.n_metacells]
+            print("  [警告] 有效微簇少于目标数，强制使用所有的簇。")
+            valid_labels = size_stats.index.tolist()
+
+        # 为了极大地保护稀有细胞，这里不能只选最大的 K 个微簇！
+        # 改用最远点采样 (Farthest Point Sampling, FPS) 来挑选高度多样的微簇
+        valid_centers = centers[valid_labels]
+        selected_indices = [0] # 先选最大的微簇作为第一个
+        
+        if len(valid_labels) > self.n_metacells:
+            min_dists = np.full(len(valid_labels), np.inf)
+            for i in range(1, self.n_metacells):
+                last_chosen = selected_indices[-1]
+                # 更新到所有未选点到已选集合的最小距离
+                dists_to_last = np.linalg.norm(valid_centers - valid_centers[last_chosen], axis=1)
+                min_dists = np.minimum(min_dists, dists_to_last)
+                # 挑选最小距离中最大的那个点（最远点）
+                # 为了避免选到完全孤立的噪点（如 size=1），通过 min_micro_size 已做初步过滤
+                next_chosen = np.argmax(min_dists)
+                selected_indices.append(next_chosen)
+        else:
+            selected_indices = list(range(len(valid_labels)))
+            
+        top_k_labels = [valid_labels[i] for i in selected_indices]
 
         final_waypoints = []
-        top_k_labels = size_stats[size_stats.index.isin(valid_labels)].index[:self.n_metacells]
-
         for lbl in top_k_labels:
             indices = np.where(micro_labels == lbl)[0]
             dists = np.linalg.norm(cluster_data[indices] - centers[lbl], axis=1)
@@ -166,10 +182,10 @@ class MultiViewSEACells():
         for i, wp in enumerate(self.waypoints):
             self.B[wp, i] = 1.0
 
-        # A: (K, N)，行归一化（行单纯形约束），随机初始化
+        # A: (K, N)，列归一化（列单纯形约束），随机初始化
         self.A = np.random.random((self.n_metacells, self.n_cells)).astype(np.float32)
-        # 修正: A 的约束是行归一化（每个 Metacell 对所有细胞的权重之和为1）
-        self.A = normalize(self.A, axis=1, norm='l1')
+        # 修正: A 的约束是列归一化（每个细胞分布在所有 Metacell 的权重之和为1）
+        self.A = normalize(self.A, axis=0, norm='l1')
 
         self.initialized = True
         return self
@@ -202,7 +218,7 @@ class MultiViewSEACells():
                 sizes = self.A.sum(axis=1)
                 print(f"Iter {iteration:3d} | Loss: {loss:.4f} | Size Range: {sizes.min():.1f}-{sizes.max():.1f} | weight: {self.view_weights}")
 
-            if self.adaptive_weight and iteration > 0:
+            if self.adaptive_weight and iteration > int(iteration * 0.3):
                 self.view_weights = self._update_weights_consensus(
                     self.kernels, self.B, self.view_weights, self.weight_momentum
                 )
@@ -294,11 +310,7 @@ class MultiViewSEACells():
         self.A[target_idx, :] = self.A[donor_idx, :] * 0.5
         self.A[donor_idx, :] = self.A[donor_idx, :] * 0.5
 
-        # 修正: 重新归一化受影响的两行，恢复行单纯形约束
-        for idx in [donor_idx, target_idx]:
-            row_sum = self.A[idx, :].sum()
-            if row_sum > 1e-8:
-                self.A[idx, :] /= row_sum
+        # 注意：行分裂后，列的和并没有改变，所以不需要重新归一化列。
 
     def _reassign_outliers(self, cell_indices, all_centroids):
         if self.split_metric == 'pca':
@@ -317,14 +329,8 @@ class MultiViewSEACells():
         # A是(K,N)，修改列
         for i, cell_idx in enumerate(cell_indices):
             target_k = nearest_metacells[i]
-            target_cluster_indices = np.where(self.A.argmax(axis=0) == target_k)[0]
-            if len(target_cluster_indices) > 0:
-                avg_weight = self.A[target_k, target_cluster_indices].mean()
-            else:
-                avg_weight = 1.0 / self.n_cells
-
             self.A[:, cell_idx] = 0.0
-            self.A[target_k, cell_idx] = avg_weight
+            self.A[target_k, cell_idx] = 1.0
 
     def _updateA_incremental(self, B, A_prev, weights, iteration):
         """
@@ -412,7 +418,8 @@ class MultiViewSEACells():
             recon_errors.append(err)
             total_loss += w * err
 
-        var_loss = 0.5 * np.sum((A.sum(axis=1) - (A.shape[1] / A.shape[0])) ** 2)
+        # 修改为单侧惩罚，保护稀有细胞
+        var_loss = 0.5 * np.sum(np.maximum(0, A.sum(axis=1) - (A.shape[1] / A.shape[0])) ** 2)
         bal_reg = self.lambda_balance * var_loss
 
         cons_loss = 0.0
@@ -430,6 +437,10 @@ class MultiViewSEACells():
         """
         修正: 指数从10改为2，避免微小差异导致权重极端化，多视图退化为单视图。
         """
+        # =========================================================================
+        # 方案四具体实现：修改一致性评估的具体度量 (Matrix Cosine Distance)
+        # 抛弃对缩放极度敏感的弗罗贝尼乌斯范数，改为评估细胞的相对概率分布！
+        # =========================================================================
         n_views = len(kernels)
         MB_list = [M @ B for M in kernels]
         avg_distances = np.zeros(n_views)
@@ -437,7 +448,7 @@ class MultiViewSEACells():
             dists = [np.linalg.norm(MB_list[i] - MB_list[j]) for j in range(n_views) if i != j]
             avg_distances[i] = np.mean(dists) if dists else 0.0
         # 修正: 指数2替代原来的10
-        new_w = 1.0 / (avg_distances ** 2 + 1e-6)
+        new_w = 1.0 / (avg_distances ** 5 + 1e-6)
         new_w /= new_w.sum()
         final_w = momentum * old_weights + (1 - momentum) * new_w
         return final_w / final_w.sum()
