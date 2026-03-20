@@ -269,3 +269,4 @@ def aggregate_metacell_mat(hdata, force_aggregate=False, verbose=True):
         print(f"   可通过 base_on='mat' 方式可视化的分辨率: {sorted(completed_resolutions)}")
         if completed_resolutions:
             print(f"   调用示例: sk.pl.plot_metacell_heatmap(hdata, ..., resolution={sorted(completed_resolutions)[0]}, base_on='mat')")
+

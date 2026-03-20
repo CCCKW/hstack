@@ -507,3 +507,210 @@ def plot_celltype_heatmaps(hdata, cell_type, chrom, start, end, resolution,
     
     plt.tight_layout()
     plt.show()
+
+# ==========================================================
+# 3. 结构增强版可视化 (First-Principle O/E 校正)
+# ==========================================================
+
+from scipy.ndimage import gaussian_filter1d
+
+def _calculate_oe(mat, log2_transform=True, pseudocount=1.0, mask_threshold=0.05):
+    """
+    计算 Observed/Expected (O/E) 矩阵核心算法。
+    已增设[高斯平滑距离衰减曲线]与[低覆盖坏点遮蔽]功能，彻底消除由于稀疏数据带来的平行对角线锯齿条纹与贯穿式十字蓝带。
+    """
+    n = mat.shape[0]
+    
+    # 1. 坏点检测 (Coverage极低的测序死角 unmappable bins，必须拉黑，否则算 O/E 会被放大为贯穿的蓝色十字条纹)
+    cov = np.sum(mat, axis=1) + np.sum(mat, axis=0)
+    bad_bins = cov < (np.mean(cov) * mask_threshold)
+    
+    # 2. 计算 1D 物理期望衰减曲线 (因为单细胞稀疏性，如果不加修饰直接用，远距离全是在剧烈抖动的锯齿！)
+    raw_expected_curve = np.zeros(n)
+    for d in range(n):
+        diag_val = np.diag(mat, d)
+        valid_vals = diag_val[diag_val > 0]
+        if len(valid_vals) > 0:
+            raw_expected_curve[d] = np.mean(valid_vals)
+        else:
+            raw_expected_curve[d] = 0.0
+            
+    # --- 核心破局修复点 ---
+    # 单细胞级别的稀疏性，让 raw_expected_curve 在大基因组距离时数值忽上忽下（比如这一条对角线平均有2个点交互，下一条突然变成0，再下一条又变成3）。
+    # 如果不强行把这条一维曲线抹平，这种抖动投射到二维就会变成【大量平行于主对角线的细条纹】！！！
+    smoothed_curve = gaussian_filter1d(raw_expected_curve, sigma=3.0)
+    smoothed_curve[smoothed_curve < 0] = 0 # 防止平滑出负数
+            
+    expected = np.zeros_like(mat, dtype=float)
+    for d in range(n):
+        val = smoothed_curve[d]
+        np.fill_diagonal(expected[d:], val)
+        if d != 0:
+            np.fill_diagonal(expected[:, d:], val)
+            
+    # 计算带有假计数平滑的 (O + p) / (E + p)
+    oe_mat = (mat + pseudocount) / (expected + pseudocount)
+    
+    # 3. 将前面检测到的基因组死角强行涂白（值设为 1.0，因为等会取了 log2 就会变成 0，在 RdBu 中就是纯白色的缝隙，而不碍眼）
+    oe_mat[bad_bins, :] = 1.0
+    oe_mat[:, bad_bins] = 1.0
+    
+    if log2_transform:
+        oe_mat = np.log2(oe_mat)
+        
+    return oe_mat
+
+def plot_metacell_heatmap_enhanced(hdata, metacell_id, chrom, start, end, resolution, balance=True, base_on='pair', cmap='RdBu_r', vmin=-2, vmax=2, **kwargs):
+    """
+    【升级增强版】带 O/E 物理背景校正的单细胞/Metacell高分辨率 Hi-C 热图可视化。
+    (保留原有数据读取功能，新增 O/E 过滤消除距离衰减红晕，让TAD和核心结构更清晰)
+    """
+    if base_on == 'pair':
+        if 'mcool' not in hdata.metacell_data or metacell_id not in hdata.metacell_data['mcool']:
+            raise ValueError(f"未找到 Metacell '{metacell_id}' 的 mcool 记录。请确保已经运行过 aggregate_metacell_pairs。")
+            
+        mcool_path = hdata.metacell_data['mcool'][metacell_id]
+        try:
+            uri = f"{mcool_path}::/resolutions/{resolution}"
+            clr = cooler.Cooler(uri)
+            mat = clr.matrix(balance=balance).fetch((chrom, start, end))
+        except Exception as e:
+            raise ValueError(f"无法在 mcool 文件中读取分辨率 {resolution}。确保 pair 流程初始化了该分辨率。详情: {e}")
+            
+    elif base_on == 'mat':
+        str_res = str(resolution)
+        if 'mat' not in hdata.metacell_data or str_res not in hdata.metacell_data['mat']:
+            raise ValueError(f"未找到基于 mat 聚合的分辨率 {resolution} 数据。view-mat 聚合只能可视化初始化的分辨率，请先运行 aggregate_metacell_mat。")
+            
+        mcool_dict = hdata.metacell_data['mat'][str_res]
+        
+        # 数据类型的强健性处理：容忍用户传入 int 但字典里是 str，或反之
+        if metacell_id not in mcool_dict and str(metacell_id) in mcool_dict:
+            metacell_id = str(metacell_id)
+        elif type(metacell_id) is str and metacell_id.isdigit() and int(metacell_id) in mcool_dict:
+            metacell_id = int(metacell_id)
+            
+        if metacell_id not in mcool_dict:
+             raise ValueError(f"未找到 Metacell '{metacell_id}' 的 mat 聚合记录。当前内存中已有的 ID 包括: {list(mcool_dict.keys())}")
+             
+        if chrom not in mcool_dict[metacell_id]:
+             raise ValueError(f"未找到染色体 {chrom} 的聚合矩阵。")
+             
+        whole_chrom_mat = mcool_dict[metacell_id][chrom]
+        start_bin = int(start // resolution)
+        end_bin = int(np.ceil(end / resolution))
+        
+        max_bins = whole_chrom_mat.shape[0]
+        start_bin = max(0, start_bin)
+        end_bin = min(max_bins, end_bin)
+        
+        mat = whole_chrom_mat[start_bin:end_bin, start_bin:end_bin].toarray()
+    else:
+        raise ValueError("base_on 参数必须是 'pair' 或 'mat'")
+
+    mat = np.nan_to_num(mat) 
+    
+    # ======== 核心结构升级步骤 ========
+    # 使用 O/E 矩阵校正算法替代原本的 log1p，彻底消除背景压制
+    oe_mat = _calculate_oe(mat, log2_transform=True)
+    oe_mat = np.nan_to_num(oe_mat)
+    
+    # 绘图
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.set_aspect('equal')
+    
+    # O/E 矩阵使用发散渐变色以 0 为中点 (红=高于预期，蓝=低于预期)
+    sns.heatmap(oe_mat, cmap=cmap, cbar=True, ax=ax, vmin=vmin, vmax=vmax, center=0.0)
+    
+    ax.set_title(f"Metacell (O/E Enhanced): {metacell_id}\n{chrom}:{start}-{end} @ {resolution//1000}kb", pad=15)
+    ax.set_xlabel("Genomic Bins")
+    ax.set_ylabel("Genomic Bins")
+    
+    plt.tight_layout()
+    plt.show()
+    return oe_mat
+
+def plot_celltype_heatmaps_enhanced(hdata, cell_type, chrom, start, end, resolution, 
+                             balance=True, base_on='pair', ncols=4, 
+                             cell_type_col='cell_type', cmap='RdBu_r',
+                              vmin=-2, vmax=2):
+    """
+    【升级增强版】可视化指定细胞类型下所有 Metacell 的 O/E 校正 Hi-C 热图 (网格展板)。
+    """
+    if not hasattr(hdata, 'metacells') or cell_type_col not in hdata.metacells.columns:
+        raise ValueError(f"hdata.metacells 中未找到列 '{cell_type_col}'，请确认存放细胞类型的列名。")
+        
+    target_obs = hdata.metacells[hdata.metacells[cell_type_col] == cell_type]
+    m_ids = target_obs.index.tolist()
+    
+    if not m_ids:
+        print(f"未找到细胞类型为 '{cell_type}' 的 Metacell，请检查名称是否正确。")
+        return
+        
+    print(f"共找到 {len(m_ids)} 个属于 '{cell_type}' 的 Metacells, 准备渲染带有物理衰减校正增强的热图...")
+    
+    nrows = math.ceil(len(m_ids) / ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 4, nrows * 4))
+    
+    if isinstance(axes, plt.Axes):
+        axes = [axes]
+    else:
+        axes = axes.flatten()
+        
+    for i, m_id in enumerate(m_ids):
+        ax = axes[i]
+        ax.set_aspect('equal')
+        
+        try:
+            if base_on == 'pair':
+                if m_id not in hdata.metacell_data.get('mcool', {}):
+                    ax.set_title(f"{m_id}\n(No mcool data)")
+                    ax.axis('off')
+                    continue
+                mcool_path = hdata.metacell_data['mcool'][m_id]
+                uri = f"{mcool_path}::/resolutions/{resolution}"
+                clr = cooler.Cooler(uri)
+                mat = clr.matrix(balance=balance).fetch((chrom, start, end))
+                
+            elif base_on == 'mat':
+                str_res = str(resolution)
+                if 'mat' not in hdata.metacell_data or str_res not in hdata.metacell_data['mat']:
+                    raise ValueError(f"未找到基于 mat 聚合的分辨率数据。")
+                mcool_dict = hdata.metacell_data['mat'][str_res]
+                if m_id not in mcool_dict or chrom not in mcool_dict[m_id]:
+                    ax.set_title(f"{m_id}\n(No mat data)")
+                    ax.axis('off')
+                    continue
+                
+                whole_chrom_mat = mcool_dict[m_id][chrom]
+                start_bin = int(start // resolution)
+                end_bin = int(np.ceil(end / resolution))
+                max_bins = whole_chrom_mat.shape[0]
+                start_bin, end_bin = max(0, start_bin), min(max_bins, end_bin)
+                mat = whole_chrom_mat[start_bin:end_bin, start_bin:end_bin].toarray()
+            else:
+                raise ValueError("base_on 必须是 'pair' 或 'mat'")
+
+            mat = np.nan_to_num(mat)
+            
+            # ======== 核心升级步骤 ========
+            oe_mat = _calculate_oe(mat, log2_transform=True)
+            oe_mat = np.nan_to_num(oe_mat)
+
+            sns.heatmap(oe_mat, cmap=cmap, cbar=True, ax=ax, vmin=vmin, vmax=vmax, center=0.0)
+            
+            ax.set_title(m_id)
+            ax.set_xticks([])
+            ax.set_yticks([])
+        except Exception as e:
+            ax.set_title(f"{m_id}\n(Error)")
+            ax.axis('off')
+            
+    for j in range(len(m_ids), len(axes)):
+        axes[j].axis('off')
+        
+    plt.suptitle(f"[O/E Enhanced] Cell Type: {cell_type} | Region: {chrom}:{start}-{end} @ {resolution//1000}kb", 
+                 y=1.02, fontsize=16, fontweight='bold')
+    
+    plt.tight_layout()
+    plt.show()
