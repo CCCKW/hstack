@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import math
 from matplotlib.colors import LogNorm
-def plot_basic_purity(hdata,figsize=(8, 6)):
+def plot_basic_purity(hdata,figsize=(8, 6), save_path=None, dpi=300):
     """可视化 1: 基础纯度柱状图"""
     purity_df = hdata.uns['purity_df']
     sns.set_theme(style="whitegrid")
@@ -14,10 +14,12 @@ def plot_basic_purity(hdata,figsize=(8, 6)):
     plt.xticks(rotation=45)
     plt.title('Basic Purity by Cell Type')
     plt.tight_layout()
+    if 'save_path' in locals() and save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
     plt.show()
 
 
-def plot_views(hdata, label=None, ncols=3):
+def plot_views(hdata, label=None, ncols=3, save_path=None, dpi=300):
     """
     绘制多视图 UMAP 散点图，支持根据视图数量动态网格排版。
     
@@ -84,11 +86,13 @@ def plot_views(hdata, label=None, ncols=3):
     fig.legend(handles=handles, loc='center left', bbox_to_anchor=(1.02, 0.5))
 
     plt.tight_layout()
+    if 'save_path' in locals() and save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
     plt.show()
 
 
 
-def plot_depth_distribution(hdata):
+def plot_depth_distribution(hdata, save_path=None, dpi=300):
     """
     绘制深度分布直方图。
     完全还原您在 pipe.py 中的深度分布画图逻辑。
@@ -106,6 +110,8 @@ def plot_depth_distribution(hdata):
     plt.title('Depth Distribution')
     plt.xlabel('Depth')
     plt.ylabel('Frequency')
+    if 'save_path' in locals() and save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
     plt.show()
 
 # ==========================================================
@@ -114,7 +120,7 @@ def plot_depth_distribution(hdata):
 
 
 
-def plot_ep_score(hdata,figsize=(12, 6)):
+def plot_ep_score(hdata,figsize=(12, 6), save_path=None, dpi=300):
     """可视化 3: 最终评估得分 EP_v2 柱状图"""
     purity_df = hdata.uns['purity_df']
     sns.set_theme(style="whitegrid")
@@ -123,10 +129,12 @@ def plot_ep_score(hdata,figsize=(12, 6)):
     plt.xticks(rotation=45)
     plt.title('EP v2 Score by Cell Type (Corrected & Penalized)')
     plt.tight_layout()
+    if 'save_path' in locals() and save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
     plt.show()
 
 
-def plot_umap_assignment(hdata,resolution=None,  figsize=(7,7)):
+def plot_umap_assignment(hdata,resolution=None,  figsize=(7,7), save_path=None, dpi=300):
     """
     可视化 4: 单点 UMAP 散点图 (按模型分配的 Metacell ID 染色)
     注: 该图只依赖模型结果，可在 calculate_metrics 之前调用
@@ -145,13 +153,15 @@ def plot_umap_assignment(hdata,resolution=None,  figsize=(7,7)):
     plt.title("UMAP: Metacell Assignments")
     plt.axis('off')
     plt.tight_layout()
+    if 'save_path' in locals() and save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
     plt.show()
 
 
 
 
 
-def plot_umap_comparison(hdata, resolution=None,  figsize=(14, 6)):
+def plot_umap_comparison(hdata, resolution=None,  figsize=(14, 6), save_path=None, dpi=300):
 
         """
         可视化 5: 双点 UMAP 对比图 (左侧为预测平滑的类型，右侧为真实单细胞类型)
@@ -185,6 +195,8 @@ def plot_umap_comparison(hdata, resolution=None,  figsize=(14, 6)):
         # 图例放右侧防止遮挡
         ax[1].legend(loc='center left', bbox_to_anchor=(1, 0.5), markerscale=3)
         plt.tight_layout()
+        if 'save_path' in locals() and save_path:
+            plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
         plt.show()
  
 
@@ -192,7 +204,7 @@ def plot_umap_comparison(hdata, resolution=None,  figsize=(14, 6)):
 
 
 
-def plot_metacell_sizes(hdata, figsize=(8, 6), bins=20):
+def plot_metacell_sizes(hdata, figsize=(8, 6), bins=20, save_path=None, dpi=300):
     purity_df_ = hdata.uns['purity_df']
     sns.set_theme(style="whitegrid")
     plt.figure(figsize=figsize)
@@ -202,13 +214,15 @@ def plot_metacell_sizes(hdata, figsize=(8, 6), bins=20):
     plt.ylabel('Frequency')
     plt.legend()
     plt.tight_layout()
+    if 'save_path' in locals() and save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
     plt.show()
         
         
 
 
 
-def plot_initialization(hdata, resolution=None, title="Initialization Waypoints",figsize=(8, 6)):
+def plot_initialization(hdata, resolution=None, title="Initialization Waypoints",figsize=(8, 6), save_path=None, dpi=300):
     if resolution is None:
         raise ValueError("请提供 resolution 参数以获取对应的 UMAP 坐标")
     umap_coords = hdata.views_umap[resolution]
@@ -222,9 +236,11 @@ def plot_initialization(hdata, resolution=None, title="Initialization Waypoints"
     plt.title(title)
     plt.axis('off')
     plt.legend()
+    if 'save_path' in locals() and save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
     plt.show()
 
-def plot_specific_metacell(hdata, metacell_id,resolution=None, figsize=(8, 6)):
+def plot_specific_metacell(hdata, metacell_id,resolution=None, figsize=(8, 6), save_path=None, dpi=300):
     if resolution is None:
         raise ValueError("请提供 resolution 参数以获取对应的 UMAP 坐标")
     labels = hdata.obs['metacell'].values
@@ -242,6 +258,8 @@ def plot_specific_metacell(hdata, metacell_id,resolution=None, figsize=(8, 6)):
         
     plt.title(f"Visual Diagnosis: Metacell {metacell_id}")
     plt.legend()
+    if 'save_path' in locals() and save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
     plt.show()
 
 
@@ -249,7 +267,7 @@ def plot_specific_metacell(hdata, metacell_id,resolution=None, figsize=(8, 6)):
 
 
 
-def plot_metacells(hdata,resolution=None, title="Final Metacell Positions", min_size=50, max_size=500, show_idx=False):
+def plot_metacells(hdata,resolution=None, title="Final Metacell Positions", min_size=50, max_size=500, show_idx=False, save_path=None, dpi=300):
     if resolution is None:
         raise ValueError("请提供 resolution 参数以获取对应的 UMAP 坐标")
     labels = hdata.obs['metacell']
@@ -302,17 +320,112 @@ def plot_metacells(hdata,resolution=None, title="Final Metacell Positions", min_
     plt.title(f"{title}\n(Metacells: {len(metacell_coords)}, Count Range: {min_c}-{max_c})")
     plt.axis('off')
     plt.tight_layout()
+    if 'save_path' in locals() and save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
     plt.show()
 
 
+def plot_metacells2(hdata, resolution=None, title="Final Metacell Positions", min_size=50, max_size=500, show_idx=False, label_col='label', cell_alpha=0.3, metacell_alpha=0.8, save_path=None, dpi=300):
+    """
+    可视化 Metacell 在 UMAP 上的位置，并用主导细胞类型 (dominant label) 染色，
+    同时将底层的单细胞也一并着色展示。
+    """
+    if resolution is None:
+        raise ValueError("请提供 resolution 参数以获取对应的 UMAP 坐标")
+    labels = hdata.obs['metacell']
+    umap_coords = hdata.views_umap[resolution]
+    metacell_coords = []
+    metacell_counts = []
+    metacell_dominant_labels = []
+    present_indices = np.unique(labels)
+    
+    import pandas as pd
+    has_labels = False
+    if label_col in hdata.obs.columns:
+        cell_labels = hdata.obs[label_col].values
+        has_labels = True
+        
+    for k in present_indices:
+        indices = np.where(labels == k)[0]
+        metacell_coords.append(np.mean(umap_coords[indices], axis=0))
+        metacell_counts.append(len(indices))
+        if has_labels:
+            dom_label = pd.Series(cell_labels[indices]).value_counts().index[0]
+            metacell_dominant_labels.append(dom_label)
+        else:
+            metacell_dominant_labels.append("Unknown")
+            
+    metacell_coords = np.array(metacell_coords)
+    metacell_counts = np.array(metacell_counts)
+    
+    if len(metacell_counts) == 0:
+        print("警告: 没有发现活跃的 metacells。")
+        return
+
+    if len(metacell_counts) > 1 and metacell_counts.max() > metacell_counts.min():
+        norm_sizes = (metacell_counts - metacell_counts.min()) / (metacell_counts.max() - metacell_counts.min())
+        plot_sizes = min_size + norm_sizes * (max_size - min_size)
+    else:
+        plot_sizes = np.full(len(metacell_counts), (min_size + max_size) / 2)
+
+    plt.figure(figsize=(10, 8))
+    
+    # 提前处理颜色映射
+    mc_colors = ['blue'] * len(metacell_coords)
+    cell_colors_list = 'lightgrey'
+    handles = []
+    
+    if has_labels:
+        if 'eval_df_cache' in hdata.uns:
+            unified_hue_order = sorted(hdata.uns['eval_df_cache']['CellType'].dropna().unique())
+        else:
+            unified_hue_order = sorted(pd.Series(cell_labels).dropna().unique())
+            
+        palette = sns.color_palette('tab20', n_colors=len(unified_hue_order))
+        color_map = {lbl: palette[i] for i, lbl in enumerate(unified_hue_order)}
+        
+        mc_colors = [color_map.get(lbl, 'blue') for lbl in metacell_dominant_labels]
+        cell_colors_list = [color_map.get(lbl, 'lightgrey') for lbl in cell_labels]
+        
+        # 添加类别图例
+        for lbl in unified_hue_order:
+            handles.append(plt.scatter([], [], c=[color_map[lbl]], s=100, edgecolors='none', linewidth=0, label=lbl))
+        # 空白分隔
+        handles.append(plt.scatter([], [], c='white', s=0, label=''))
+
+    # 绘制底层的单细胞
+    plt.scatter(umap_coords[:, 0], umap_coords[:, 1], c=cell_colors_list, s=5, alpha=cell_alpha, rasterized=True, edgecolors='none', linewidth=0)
+
+    # 绘制顶层的 Metacell
+    plt.scatter(metacell_coords[:, 0], metacell_coords[:, 1],
+            c=mc_colors, s=plot_sizes, edgecolors='none', linewidths=0, alpha=metacell_alpha, zorder=10)
+    min_c = metacell_counts.min()
+    max_c = metacell_counts.max()
+    mid_c = int((min_c + max_c) / 2)
+    legend_sizes = [min_size, (min_size+max_size)/2, max_size]
+    legend_labels = [f'{min_c} cells', f'{mid_c} cells', f'{max_c} cells']
+    
+    # 尺寸图例
+    for s, l in zip(legend_sizes, legend_labels):
+        handles.append(plt.scatter([], [], c='gray', alpha=0.8, s=s, edgecolors='none', linewidth=0, label=l))
+    handles.append(plt.scatter([], [], c='lightgrey', s=20, edgecolors='none', linewidth=0, label='Single Cells'))
+    
+    plt.legend(handles=handles, title="Metacell Legend", loc='center left', bbox_to_anchor=(1, 0.5), labelspacing=1.0, borderpad=1)
+    
+    if show_idx:
+        for i, k in enumerate(present_indices):
+            plt.text(metacell_coords[i, 0], metacell_coords[i, 1], str(k), 
+                        fontsize=10, ha='center', va='center', color='black', fontweight='bold', zorder=20)
+    
+    plt.title(f"{title}\n(Metacells: {len(metacell_coords)}, Count Range: {min_c}-{max_c})")
+    plt.axis('off')
+    plt.tight_layout()
+    if 'save_path' in locals() and save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
+    plt.show()
 
 
-
-
-
-
-
-def plot_metacell_heatmap(hdata, metacell_id, chrom, start, end, resolution, balance=True, base_on='pair', cmap='Reds', vmin=None, vmax=None,log1p=True,fill_diagonal_zero=True,**kwargs):
+def plot_metacell_heatmap(hdata, metacell_id, chrom, start, end, resolution, balance=True, base_on='pair', cmap='Reds', vmin=None, vmax=None,log1p=True,fill_diagonal_zero=True,save_path=None, dpi=300, **kwargs):
     """
     可视化单个 Metacell 在指定区间的高分辨率 Hi-C 热图。
     
@@ -367,7 +480,7 @@ def plot_metacell_heatmap(hdata, metacell_id, chrom, start, end, resolution, bal
     if log1p:
         mat = np.log1p(mat)
     if fill_diagonal_zero:
-        mat = np.fill_diagonal(mat, 0)
+        np.fill_diagonal(mat, 0)
     # 绘图
     fig, ax = plt.subplots(figsize=(6, 6))
     ax.set_aspect('equal') # 强制正方形
@@ -390,10 +503,12 @@ def plot_metacell_heatmap(hdata, metacell_id, chrom, start, end, resolution, bal
 
     
     plt.tight_layout()
+    if 'save_path' in locals() and save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
     plt.show()
     return mat
 
-def plot_cell_of_metacell_heatmap(hdata, metacell_id, cell_id, chrom, start, end, resolution, balance=True, base_on='pair', cmap='Reds', vmin=None, vmax=None, log1p=True, fill_diagonal_zero=True, **kwargs):
+def plot_cell_of_metacell_heatmap(hdata, metacell_id, cell_id, chrom, start, end, resolution, balance=True, base_on='pair', cmap='Reds', vmin=None, vmax=None, log1p=True, fill_diagonal_zero=True, save_path=None, dpi=300, **kwargs):
     """
     可视化指定 Metacell 内单个原始细胞的高分辨率 Hi-C 热图。
     
@@ -507,6 +622,8 @@ def plot_cell_of_metacell_heatmap(hdata, metacell_id, cell_id, chrom, start, end
     ax.set_ylabel("Genomic Bins")
     
     plt.tight_layout()
+    if 'save_path' in locals() and save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
     plt.show()
     return mat
 
@@ -515,7 +632,7 @@ def plot_celltype_heatmaps(hdata, cell_type, chrom, start, end, resolution,
                             balance=True, base_on='pair', ncols=4, 
                             cell_type_col='cell_type', cmap='Reds',
                             log1p=True, fill_diagonal_zero=True,
-                             vmax=None, vmin=None):
+                             vmax=None, vmin=None, save_path=None, dpi=300):
     """
     可视化指定细胞类型下所有 Metacell 的 Hi-C 热图 (以网格形式展示)。
     
@@ -626,6 +743,8 @@ def plot_celltype_heatmaps(hdata, cell_type, chrom, start, end, resolution,
                  y=1.02, fontsize=16, fontweight='bold')
     
     plt.tight_layout()
+    if 'save_path' in locals() and save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
     plt.show()
 
 # ==========================================================
@@ -680,7 +799,7 @@ def _calculate_oe(mat, log2_transform=True, pseudocount=1.0, mask_threshold=0.05
         
     return oe_mat
 
-def plot_metacell_heatmap_enhanced(hdata, metacell_id, chrom, start, end, resolution, balance=True, base_on='pair', cmap='RdBu_r', vmin=-2, vmax=2, **kwargs):
+def plot_metacell_heatmap_enhanced(hdata, metacell_id, chrom, start, end, resolution, balance=True, base_on='pair', cmap='RdBu_r', vmin=-2, vmax=2, save_path=None, dpi=300, **kwargs):
     """
     【升级增强版】带 O/E 物理背景校正的单细胞/Metacell高分辨率 Hi-C 热图可视化。
     (保留原有数据读取功能，新增 O/E 过滤消除距离衰减红晕，让TAD和核心结构更清晰)
@@ -748,10 +867,12 @@ def plot_metacell_heatmap_enhanced(hdata, metacell_id, chrom, start, end, resolu
     ax.set_ylabel("Genomic Bins")
     
     plt.tight_layout()
+    if 'save_path' in locals() and save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
     plt.show()
     return oe_mat
 
-def plot_cell_of_metacell_heatmap_enhanced(hdata, metacell_id, cell_id, chrom, start, end, resolution, balance=True, base_on='pair', cmap='RdBu_r', vmin=-2, vmax=2, **kwargs):
+def plot_cell_of_metacell_heatmap_enhanced(hdata, metacell_id, cell_id, chrom, start, end, resolution, balance=True, base_on='pair', cmap='RdBu_r', vmin=-2, vmax=2, save_path=None, dpi=300, **kwargs):
     """
     【升级增强版】带 O/E 物理背景校正的指定 Metacell 内单个原始细胞的高分辨率 Hi-C 热图可视化。
     """
@@ -843,13 +964,15 @@ def plot_cell_of_metacell_heatmap_enhanced(hdata, metacell_id, cell_id, chrom, s
     ax.set_ylabel("Genomic Bins")
     
     plt.tight_layout()
+    if 'save_path' in locals() and save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
     plt.show()
     return oe_mat
 
 def plot_celltype_heatmaps_enhanced(hdata, cell_type, chrom, start, end, resolution, 
                              balance=True, base_on='pair', ncols=4, 
                              cell_type_col='cell_type', cmap='RdBu_r',
-                              vmin=-2, vmax=2):
+                              vmin=-2, vmax=2, save_path=None, dpi=300):
     """
     【升级增强版】可视化指定细胞类型下所有 Metacell 的 O/E 校正 Hi-C 热图 (网格展板)。
     """
@@ -930,4 +1053,6 @@ def plot_celltype_heatmaps_enhanced(hdata, cell_type, chrom, start, end, resolut
                  y=1.02, fontsize=16, fontweight='bold')
     
     plt.tight_layout()
+    if 'save_path' in locals() and save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
     plt.show()

@@ -38,7 +38,8 @@ class MultiViewSEACells():
                  min_size_threshold=0.002,
                  respawn_interval=10,
                  split_metric='pca',
-                 weight_method='consensus'):
+                 weight_method='consensus',
+                 lambda_ortho=0.01):
 
         self.n_metacells = n_metacells
         self.lambda_balance = lambda_balance
@@ -53,6 +54,7 @@ class MultiViewSEACells():
         self.respawn_interval = respawn_interval
         self.split_metric = split_metric
         self.weight_method = weight_method
+        self.lambda_ortho = lambda_ortho
 
         self.kernels_computed = False
         self.initialized = False
@@ -373,6 +375,14 @@ class MultiViewSEACells():
                 for idx, M in enumerate(self.kernels):
                     term = (M.T @ Z_list[idx]) @ AA_T
                     G += 2.0 * weights[idx] * term
+                    
+                    if self.lambda_ortho > 0.0:
+                        Z = Z_list[idx]
+                        Q = Z.T @ Z
+                        np.fill_diagonal(Q, 0.0)
+                        grad_ortho = 4.0 * (M.T @ Z @ Q)
+                        G += self.lambda_ortho * weights[idx] * grad_ortho
+                        
                 if self.lambda_consistency > 0 and len(self.kernels) > 1:
                     G += self.lambda_consistency * self._compute_cons_grad_from_Z(Z_list)
 
@@ -451,6 +461,8 @@ class MultiViewSEACells():
         total_loss = 0
         recon_errors = []
         AA_T = A @ A.T
+        ortho_loss = 0.0
+        
         for i, (M, w) in enumerate(zip(kernels, weights)):
             term1 = self.kernel_norms_sq[i]
             MB = M @ B
@@ -460,6 +472,14 @@ class MultiViewSEACells():
             err = max(0.0, term1 + term2 + term3)
             recon_errors.append(err)
             total_loss += w * err
+            
+            if self.lambda_ortho > 0.0:
+                P = MB.T @ MB
+                Q = P - np.diag(np.diag(P))
+                ortho_loss += w * np.sum(Q ** 2)
+
+        ortho_reg = self.lambda_ortho * ortho_loss
+        total_loss += ortho_reg
 
         # 修改为单侧惩罚，保护稀有细胞
         var_loss = 0.5 * np.sum(np.maximum(0, A.sum(axis=1) - (A.shape[1] / A.shape[0])) ** 2)

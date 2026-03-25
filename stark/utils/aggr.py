@@ -118,7 +118,15 @@ def aggregate_metacell_pairs(hdata, n_jobs=10, force_aggregate=False,
         if verbose and os.path.exists(log_path) and not force_aggregate:
             print(">>> 分配发生改变或被强制重跑，正在重新聚合并覆盖历史 pairs 文件...")
 
-        if not os.path.exists(save_dir): os.makedirs(save_dir, exist_ok=True)
+        if os.path.exists(save_dir):
+            shutil.rmtree(save_dir)
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # 彻底清理历史相关的 cool 残留文件
+        base_cool_dir = os.path.join(log_dir, "cool")
+        if os.path.exists(base_cool_dir):
+            shutil.rmtree(base_cool_dir)
+            
         pair_paths = {}
         all_files = []
         for val in sorted(os.listdir(hdata.data_dir)):
@@ -148,7 +156,7 @@ def aggregate_metacell_pairs(hdata, n_jobs=10, force_aggregate=False,
             if str(resolution) not in hdata.metacell_data['cool']:
                 hdata.metacell_data['cool'][str(resolution)] = {}
             for f in os.listdir(cool_dir):
-                if f.endswith('.cool'):
+                if f.startswith('metacell_') and f.endswith('.cool'):
                     m_id = int(f.split('_')[1].split('.')[0])
                     hdata.metacell_data['cool'][str(resolution)][m_id] = os.path.join(cool_dir, f)
 
@@ -188,7 +196,7 @@ def aggregate_metacell_pairs(hdata, n_jobs=10, force_aggregate=False,
             cool_to_mcool(hdata, base_resolution=resolution, resolutions=mcool_resolutions, n_jobs=n_jobs, verbose=verbose)
             
             for f in os.listdir(mcool_dir):
-                if f.endswith('.mcool'):
+                if f.startswith('metacell_') and f.endswith('.mcool'):
                     m_id = int(f.split('_')[1].split('.')[0])
                     hdata.metacell_data['mcool'][m_id] = os.path.join(mcool_dir, f)
 

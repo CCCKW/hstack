@@ -54,7 +54,7 @@ def pairs_to_cool(hdata, resolution=10000, n_jobs=10, verbose=True):
     if not os.path.exists(cool_dir):
         os.makedirs(cool_dir, exist_ok=True)
         
-    pair_files = [f for f in os.listdir(pair_dir) if f.endswith(".pairs")]
+    pair_files = [f for f in os.listdir(pair_dir) if f.startswith('metacell_') and f.endswith(".pairs")]
     tasks = []
     for f in pair_files:
         pair_path = os.path.join(pair_dir, f)
@@ -95,7 +95,7 @@ def cool_to_mcool(hdata, base_resolution=10000, resolutions=None, n_jobs=10, ver
     
     res_str = ",".join(map(str, resolutions))
     
-    cool_files = [f for f in os.listdir(cool_dir) if f.endswith(".cool")]
+    cool_files = [f for f in os.listdir(cool_dir) if f.startswith('metacell_') and f.endswith(".cool")]
     tasks = []
     for f in cool_files:
         cool_path = os.path.join(cool_dir, f)
