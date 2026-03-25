@@ -37,7 +37,8 @@ class MultiViewSEACells():
                  n_neighbors=15,
                  min_size_threshold=0.002,
                  respawn_interval=10,
-                 split_metric='pca'):
+                 split_metric='pca',
+                 weight_method='consensus'):
 
         self.n_metacells = n_metacells
         self.lambda_balance = lambda_balance
@@ -51,6 +52,7 @@ class MultiViewSEACells():
         self.min_size_threshold = min_size_threshold
         self.respawn_interval = respawn_interval
         self.split_metric = split_metric
+        self.weight_method = weight_method
 
         self.kernels_computed = False
         self.initialized = False
@@ -219,8 +221,8 @@ class MultiViewSEACells():
                 print(f"Iter {iteration:3d} | Loss: {loss:.4f} | Size Range: {sizes.min():.1f}-{sizes.max():.1f} | weight: {self.view_weights}")
 
             if self.adaptive_weight and iteration > int(iteration * 0.3):
-                self.view_weights = self._update_weights_consensus(
-                    self.kernels, self.B, self.view_weights, self.weight_momentum
+                self.view_weights = self._update_weights(
+                    self.kernels, self.B, self.view_weights, self.weight_momentum, self.weight_method
                 )
 
         self.labels = np.array(self.A.argmax(axis=0)).reshape(-1)
@@ -403,6 +405,47 @@ class MultiViewSEACells():
                 count += 1
         return 2.0 * grad / count if count else grad
 
+    def _update_weights(self, kernels, B, old_weights, momentum, method='consensus'):
+        """
+        根据指定的权重更新策略更新不同视图的权重。
+        支持 'consensus' (原有基于多视图一致性的方法) 和 'awp' (Auto-Weighted Multiple Graph Learning)。
+        """
+        n_views = len(kernels)
+        MB_list = [M @ B for M in kernels]
+        
+        if method == 'consensus':
+            # =========================================================================
+            # 方案四具体实现：修改一致性评估的具体度量 (Matrix Cosine Distance)
+            # 抛弃对缩放极度敏感的弗罗贝尼乌斯范数，改为评估细胞的相对概率亲和/分布！
+            # =========================================================================
+            avg_distances = np.zeros(n_views)
+            for i in range(n_views):
+                dists = [np.linalg.norm(MB_list[i] - MB_list[j]) for j in range(n_views) if i != j]
+                avg_distances[i] = np.mean(dists) if dists else 0.0
+            # 修正: 指数2替代原来的10
+            new_w = 1.0 / (avg_distances ** 5 + 1e-6)
+            new_w /= new_w.sum()
+            
+        elif method == 'awp':
+            # =========================================================================
+            # AWP (Auto-Weighted Multiple Graph Learning) 具体实现：
+            # 质量差的图与融合图差距大，自动获得小权重。
+            # =========================================================================
+            fused_MB = np.mean(MB_list, axis=0)
+            distances = np.zeros(n_views)
+            for i in range(n_views):
+                distances[i] = np.linalg.norm(MB_list[i] - fused_MB)
+            
+            # 使用 AWP 原理，惩罚差异较大的图，差异越小则权重越大
+            new_w = 1.0 / (2.0 * distances + 1e-6)
+            new_w /= new_w.sum()
+            
+        else:
+            raise ValueError(f"Unknown weight_method: {method}")
+            
+        final_w = momentum * old_weights + (1 - momentum) * new_w
+        return final_w / final_w.sum()
+
     def _compute_loss_efficient(self, kernels, B, A, weights):
         """删除稀疏正则项，返回值中 sparse_reg 恒为 0"""
         total_loss = 0
@@ -432,23 +475,3 @@ class MultiViewSEACells():
         cons_reg = self.lambda_consistency * (cons_loss / count if count else 0)
 
         return total_loss + bal_reg + cons_reg, np.array(recon_errors), cons_reg, bal_reg
-
-    def _update_weights_consensus(self, kernels, B, old_weights, momentum):
-        """
-        修正: 指数从10改为2，避免微小差异导致权重极端化，多视图退化为单视图。
-        """
-        # =========================================================================
-        # 方案四具体实现：修改一致性评估的具体度量 (Matrix Cosine Distance)
-        # 抛弃对缩放极度敏感的弗罗贝尼乌斯范数，改为评估细胞的相对概率分布！
-        # =========================================================================
-        n_views = len(kernels)
-        MB_list = [M @ B for M in kernels]
-        avg_distances = np.zeros(n_views)
-        for i in range(n_views):
-            dists = [np.linalg.norm(MB_list[i] - MB_list[j]) for j in range(n_views) if i != j]
-            avg_distances[i] = np.mean(dists) if dists else 0.0
-        # 修正: 指数2替代原来的10
-        new_w = 1.0 / (avg_distances ** 5 + 1e-6)
-        new_w /= new_w.sum()
-        final_w = momentum * old_weights + (1 - momentum) * new_w
-        return final_w / final_w.sum()

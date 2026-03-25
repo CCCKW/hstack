@@ -338,14 +338,15 @@ def plot_metacell_heatmap(hdata, metacell_id, chrom, start, end, resolution, bal
         except Exception as e:
             raise ValueError(f"无法在 mcool 文件中读取分辨率 {resolution}。确保 pair 流程初始化了该分辨率。详情: {e}")
             
-    elif base_on == 'mat':
+    elif base_on in ['mat', 'mat_redist', 'mat_consensus']:
         str_res = str(resolution)
-        if 'mat' not in hdata.metacell_data or str_res not in hdata.metacell_data['mat']:
-            raise ValueError(f"未找到基于 mat 聚合的分辨率 {resolution} 数据。view-mat 聚合只能可视化初始化的分辨率，请先运行 aggregate_metacell_mat。")
+        dict_key = base_on
+        if dict_key not in hdata.metacell_data or str_res not in hdata.metacell_data[dict_key]:
+            raise ValueError(f"未找到基于 {base_on} 聚合的分辨率 {resolution} 数据。请先运行对应的聚合函数。")
             
-        mcool_dict = hdata.metacell_data['mat'][str_res]
+        mcool_dict = hdata.metacell_data[dict_key][str_res]
         if metacell_id not in mcool_dict:
-             raise ValueError(f"未找到 Metacell '{metacell_id}' 的 mat 聚合记录。")
+             raise ValueError(f"未找到 Metacell '{metacell_id}' 的 {base_on} 聚合记录。")
              
         if chrom not in mcool_dict[metacell_id]:
              raise ValueError(f"未找到染色体 {chrom} 的聚合矩阵。")
@@ -366,7 +367,7 @@ def plot_metacell_heatmap(hdata, metacell_id, chrom, start, end, resolution, bal
     if log1p:
         mat = np.log1p(mat)
     if fill_diagonal_zero:
-        np.fill_diagonal(mat, 0)
+        mat = np.fill_diagonal(mat, 0)
     # 绘图
     fig, ax = plt.subplots(figsize=(6, 6))
     ax.set_aspect('equal') # 强制正方形
@@ -391,6 +392,124 @@ def plot_metacell_heatmap(hdata, metacell_id, chrom, start, end, resolution, bal
     plt.tight_layout()
     plt.show()
     return mat
+
+def plot_cell_of_metacell_heatmap(hdata, metacell_id, cell_id, chrom, start, end, resolution, balance=True, base_on='pair', cmap='Reds', vmin=None, vmax=None, log1p=True, fill_diagonal_zero=True, **kwargs):
+    """
+    可视化指定 Metacell 内单个原始细胞的高分辨率 Hi-C 热图。
+    
+    参数:
+    - hdata: 核心数据对象
+    - metacell_id: 目标 metacell 的 ID (如果在 hdata.obs 中有记录可供校验，否则仅用于标题展示)
+    - cell_id: 目标单细胞的 ID (在 hdata.obs.index 中的索引或名称)
+    - 其他参数与 plot_metacell_heatmap 保持一致
+    """
+    mat = None
+    if base_on == 'pair':
+        # 尝试查找已生成的单细胞 cool/mcool 文件
+        # 如果 cell_id 是整数索引，我们根据 hdata.data_dir 中的文件顺序推推断其对应的文件名
+        cell_name = str(cell_id)
+        if isinstance(cell_id, int) or str(cell_id).isdigit():
+            idx = int(cell_id)
+            all_files = []
+            import os
+            for val in sorted(os.listdir(hdata.data_dir)):
+                if val.endswith('.pairs') or val.endswith('.pairs.gz'):
+                    all_files.append(val)
+            if idx < len(all_files):
+                cell_name = all_files[idx].split('.pairs')[0]
+        
+        # 在相关目录中寻找匹配的 mcool/cool 文件
+        mcool_path = None
+        import os
+        search_dirs = [hdata.data_dir, hdata.output_dir]
+        for s_dir in search_dirs:
+            if not os.path.exists(s_dir): continue
+            for root, _, files in os.walk(s_dir):
+                for f in files:
+                    if f.endswith('.mcool') or f.endswith('.cool'):
+                        if cell_name in f or str(cell_id) in f:
+                            mcool_path = os.path.join(root, f)
+                            break
+                if mcool_path: break
+            if mcool_path: break
+            
+        if not mcool_path:
+            raise ValueError(f"未找到单细胞 '{cell_id}' 对应的 .mcool 或 .cool 文件，请确认已生成该文件或使用 base_on='mat'。")
+            
+        try:
+            import cooler
+            if mcool_path.endswith('.mcool'):
+                uri = f"{mcool_path}::/resolutions/{resolution}"
+            else:
+                uri = f"{mcool_path}::/resolutions/{resolution}"
+                if not cooler.fileops.is_multires_file(mcool_path):
+                    uri = mcool_path
+            clr = cooler.Cooler(uri)
+            mat = clr.matrix(balance=balance).fetch((chrom, start, end))
+        except Exception as e:
+            raise ValueError(f"无法在文件 {mcool_path} 中读取数据。详情: {e}")
+            
+    elif base_on in ['mat', 'mat_redist', 'mat_consensus']:
+        if not hdata.views_mat:
+            raise ValueError("hdata.views_mat 为空，请确认已运行预处理。")
+        if resolution not in hdata.views_mat:
+            raise ValueError(f"未找到分辨率 {resolution} 的 views_mat 数据。")
+        if chrom not in hdata.views_mat[resolution]:
+            raise ValueError(f"未找到染色体 {chrom} 的 views_mat 数据。")
+            
+        try:
+            cell_idx = hdata.obs.index.get_loc(cell_id)
+        except KeyError:
+            if isinstance(cell_id, int) and cell_id < len(hdata.obs):
+                cell_idx = cell_id
+            else:
+                raise ValueError(f"Cell ID '{cell_id}' 不在 hdata.obs.index 中。")
+                
+        whole_chrom_mat = hdata.views_mat[resolution][chrom][cell_idx]
+        start_bin = int(start // resolution)
+        end_bin = int(np.ceil(end / resolution))
+        max_bins = whole_chrom_mat.shape[0]
+        start_bin = max(0, start_bin)
+        end_bin = min(max_bins, end_bin)
+        
+        # hdata.views_mat 中通常是稀疏矩阵，需转为密集矩阵并切片
+        import scipy.sparse as sp
+        if sp.issparse(whole_chrom_mat):
+            mat = whole_chrom_mat.tocsr()[start_bin:end_bin, start_bin:end_bin].toarray()
+        else:
+            mat = whole_chrom_mat[start_bin:end_bin, start_bin:end_bin]
+    else:
+        raise ValueError("base_on 参数必须是 'pair' 或 'mat'")
+
+    mat = np.nan_to_num(mat)
+    if log1p:
+        mat = np.log1p(mat)
+    if fill_diagonal_zero:
+        np.fill_diagonal(mat, 0)
+        
+    # 绘图
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.set_aspect('equal')
+    
+    if vmax is None:
+        if vmin is None:
+            sns.heatmap(mat, cmap=cmap, cbar=True, ax=ax)
+        else:
+            sns.heatmap(mat, cmap=cmap, cbar=True, ax=ax, vmin=vmin)
+    else:
+        if vmin is None:
+            sns.heatmap(mat, cmap=cmap, cbar=True, ax=ax, vmax=vmax)
+        else:
+            sns.heatmap(mat, cmap=cmap, cbar=True, ax=ax, vmin=vmin, vmax=vmax)
+    
+    ax.set_title(f"Metacell: {metacell_id} | Cell: {cell_id}\n{chrom}:{start}-{end} @ {resolution//1000}kb", pad=15)
+    ax.set_xlabel("Genomic Bins")
+    ax.set_ylabel("Genomic Bins")
+    
+    plt.tight_layout()
+    plt.show()
+    return mat
+
 
 def plot_celltype_heatmaps(hdata, cell_type, chrom, start, end, resolution, 
                             balance=True, base_on='pair', ncols=4, 
@@ -451,11 +570,12 @@ def plot_celltype_heatmaps(hdata, cell_type, chrom, start, end, resolution,
                 clr = cooler.Cooler(uri)
                 mat = clr.matrix(balance=balance).fetch((chrom, start, end))
                 
-            elif base_on == 'mat':
+            elif base_on in ['mat', 'mat_redist', 'mat_consensus']:
                 str_res = str(resolution)
-                if 'mat' not in hdata.metacell_data or str_res not in hdata.metacell_data['mat']:
-                    raise ValueError(f"未找到基于 mat 聚合的分辨率数据。")
-                mcool_dict = hdata.metacell_data['mat'][str_res]
+                dict_key = base_on
+                if dict_key not in hdata.metacell_data or str_res not in hdata.metacell_data[dict_key]:
+                    raise ValueError(f"未找到基于 {base_on} 聚合的分辨率数据。")
+                mcool_dict = hdata.metacell_data[dict_key][str_res]
                 if m_id not in mcool_dict or chrom not in mcool_dict[m_id]:
                     ax.set_title(f"{m_id}\n(No mat data)")
                     ax.axis('off')
@@ -577,12 +697,13 @@ def plot_metacell_heatmap_enhanced(hdata, metacell_id, chrom, start, end, resolu
         except Exception as e:
             raise ValueError(f"无法在 mcool 文件中读取分辨率 {resolution}。确保 pair 流程初始化了该分辨率。详情: {e}")
             
-    elif base_on == 'mat':
+    elif base_on in ['mat', 'mat_redist', 'mat_consensus']:
         str_res = str(resolution)
-        if 'mat' not in hdata.metacell_data or str_res not in hdata.metacell_data['mat']:
-            raise ValueError(f"未找到基于 mat 聚合的分辨率 {resolution} 数据。view-mat 聚合只能可视化初始化的分辨率，请先运行 aggregate_metacell_mat。")
+        dict_key = base_on
+        if dict_key not in hdata.metacell_data or str_res not in hdata.metacell_data[dict_key]:
+            raise ValueError(f"未找到基于 {base_on} 聚合的分辨率 {resolution} 数据。请先运行对应的聚合函数。")
             
-        mcool_dict = hdata.metacell_data['mat'][str_res]
+        mcool_dict = hdata.metacell_data[dict_key][str_res]
         
         # 数据类型的强健性处理：容忍用户传入 int 但字典里是 str，或反之
         if metacell_id not in mcool_dict and str(metacell_id) in mcool_dict:
@@ -623,6 +744,101 @@ def plot_metacell_heatmap_enhanced(hdata, metacell_id, chrom, start, end, resolu
     sns.heatmap(oe_mat, cmap=cmap, cbar=True, ax=ax, vmin=vmin, vmax=vmax, center=0.0)
     
     ax.set_title(f"Metacell (O/E Enhanced): {metacell_id}\n{chrom}:{start}-{end} @ {resolution//1000}kb", pad=15)
+    ax.set_xlabel("Genomic Bins")
+    ax.set_ylabel("Genomic Bins")
+    
+    plt.tight_layout()
+    plt.show()
+    return oe_mat
+
+def plot_cell_of_metacell_heatmap_enhanced(hdata, metacell_id, cell_id, chrom, start, end, resolution, balance=True, base_on='pair', cmap='RdBu_r', vmin=-2, vmax=2, **kwargs):
+    """
+    【升级增强版】带 O/E 物理背景校正的指定 Metacell 内单个原始细胞的高分辨率 Hi-C 热图可视化。
+    """
+    mat = None
+    if base_on == 'pair':
+        cell_name = str(cell_id)
+        if isinstance(cell_id, int) or str(cell_id).isdigit():
+            idx = int(cell_id)
+            all_files = []
+            import os
+            for val in sorted(os.listdir(hdata.data_dir)):
+                if val.endswith('.pairs') or val.endswith('.pairs.gz'):
+                    all_files.append(val)
+            if idx < len(all_files):
+                cell_name = all_files[idx].split('.pairs')[0]
+        
+        mcool_path = None
+        import os
+        search_dirs = [hdata.data_dir, hdata.output_dir]
+        for s_dir in search_dirs:
+            if not os.path.exists(s_dir): continue
+            for root, _, files in os.walk(s_dir):
+                for f in files:
+                    if f.endswith('.mcool') or f.endswith('.cool'):
+                        if cell_name in f or str(cell_id) in f:
+                            mcool_path = os.path.join(root, f)
+                            break
+                if mcool_path: break
+            if mcool_path: break
+            
+        if not mcool_path:
+            raise ValueError(f"未找到单细胞 '{cell_id}' 对应的 .mcool 或 .cool 文件，请确认已生成该文件或使用 base_on='mat'。")
+            
+        try:
+            import cooler
+            if mcool_path.endswith('.mcool'):
+                uri = f"{mcool_path}::/resolutions/{resolution}"
+            else:
+                uri = f"{mcool_path}::/resolutions/{resolution}"
+                if not cooler.fileops.is_multires_file(mcool_path):
+                    uri = mcool_path
+            clr = cooler.Cooler(uri)
+            mat = clr.matrix(balance=balance).fetch((chrom, start, end))
+        except Exception as e:
+            raise ValueError(f"无法在文件 {mcool_path} 中读取数据。详情: {e}")
+            
+    elif base_on == 'mat' or base_on == 'mat_redist':
+        if not hdata.views_mat:
+            raise ValueError("hdata.views_mat 为空，请确认已运行预处理。")
+        if resolution not in hdata.views_mat:
+            raise ValueError(f"未找到分辨率 {resolution} 的 views_mat 数据。")
+        if chrom not in hdata.views_mat[resolution]:
+            raise ValueError(f"未找到染色体 {chrom} 的 views_mat 数据。")
+            
+        try:
+            cell_idx = hdata.obs.index.get_loc(cell_id)
+        except KeyError:
+            if isinstance(cell_id, int) and cell_id < len(hdata.obs):
+                cell_idx = cell_id
+            else:
+                raise ValueError(f"Cell ID '{cell_id}' 不在 hdata.obs.index 中。")
+                
+        whole_chrom_mat = hdata.views_mat[resolution][chrom][cell_idx]
+        start_bin = int(start // resolution)
+        end_bin = int(np.ceil(end / resolution))
+        max_bins = whole_chrom_mat.shape[0]
+        start_bin = max(0, start_bin)
+        end_bin = min(max_bins, end_bin)
+        
+        import scipy.sparse as sp
+        if sp.issparse(whole_chrom_mat):
+            mat = whole_chrom_mat.tocsr()[start_bin:end_bin, start_bin:end_bin].toarray()
+        else:
+            mat = whole_chrom_mat[start_bin:end_bin, start_bin:end_bin]
+    else:
+        raise ValueError("base_on 参数必须是 'pair' 或 'mat'")
+
+    mat = np.nan_to_num(mat) 
+    oe_mat = _calculate_oe(mat, log2_transform=True)
+    oe_mat = np.nan_to_num(oe_mat)
+    
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.set_aspect('equal')
+    
+    sns.heatmap(oe_mat, cmap=cmap, cbar=True, ax=ax, vmin=vmin, vmax=vmax, center=0.0)
+    
+    ax.set_title(f"Metacell (O/E Enhanced): {metacell_id} | Cell: {cell_id}\n{chrom}:{start}-{end} @ {resolution//1000}kb", pad=15)
     ax.set_xlabel("Genomic Bins")
     ax.set_ylabel("Genomic Bins")
     
@@ -672,11 +888,12 @@ def plot_celltype_heatmaps_enhanced(hdata, cell_type, chrom, start, end, resolut
                 clr = cooler.Cooler(uri)
                 mat = clr.matrix(balance=balance).fetch((chrom, start, end))
                 
-            elif base_on == 'mat':
+            elif base_on in ['mat', 'mat_redist']:
                 str_res = str(resolution)
-                if 'mat' not in hdata.metacell_data or str_res not in hdata.metacell_data['mat']:
-                    raise ValueError(f"未找到基于 mat 聚合的分辨率数据。")
-                mcool_dict = hdata.metacell_data['mat'][str_res]
+                dict_key = 'mat' if base_on == 'mat' else 'mat_redist'
+                if dict_key not in hdata.metacell_data or str_res not in hdata.metacell_data[dict_key]:
+                    raise ValueError(f"未找到基于 {base_on} 聚合的分辨率数据。")
+                mcool_dict = hdata.metacell_data[dict_key][str_res]
                 if m_id not in mcool_dict or chrom not in mcool_dict[m_id]:
                     ax.set_title(f"{m_id}\n(No mat data)")
                     ax.axis('off')

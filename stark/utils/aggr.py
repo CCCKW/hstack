@@ -270,3 +270,78 @@ def aggregate_metacell_mat(hdata, force_aggregate=False, verbose=True):
         if completed_resolutions:
             print(f"   调用示例: sk.pl.plot_metacell_heatmap(hdata, ..., resolution={sorted(completed_resolutions)[0]}, base_on='mat')")
 
+def aggregate_metacell_mat_consensus(hdata, force_aggregate=False, target_sum=1e5, verbose=True):
+    """
+    结构保守性聚合 (Structural Consensus Aggregation)
+    在把单细胞矩阵累加成为 Metacell 之前，先对各个单细胞进行 log1p 压制离群噪声点，
+    并进行深度归一化 (赋予每个细胞相等的结构权重)，从而突出共有的拓扑结构。
+    """
+    if 'metacell' not in hdata.obs:
+        raise ValueError("hdata.obs 中未发现 'metacell' 标签。")
+
+    if not hdata.views_mat:
+        raise ValueError("hdata.views_mat 为空，请先运行预处理。")
+
+    if 'mat_consensus' not in hdata.metacell_data:
+        hdata.metacell_data['mat_consensus'] = {}
+
+    metacell_groups = hdata.obs.groupby('metacell').groups
+    chrom_list = hdata.chrom_list
+    import scipy.sparse as sp
+    import numpy as np
+
+    pos_idx_map = {
+        m_id: [hdata.obs.index.get_loc(idx) for idx in indices_list]
+        for m_id, indices_list in metacell_groups.items()
+    }
+
+    completed_resolutions = []
+
+    for resolution, mat_dict in hdata.views_mat.items():
+        str_res = str(resolution)
+
+        if str_res in hdata.metacell_data['mat_consensus'] and not force_aggregate:
+            if verbose: print(f"⏭️  分辨率 {resolution} consensus 已存在，跳过。")
+            completed_resolutions.append(resolution)
+            continue
+
+        hdata.metacell_data['mat_consensus'][str_res] = {}
+        all_res_dict = hdata.metacell_data['mat_consensus'][str_res]
+
+        for m_id, pos_indices in tqdm(pos_idx_map.items(), desc=f"Consensus Aggr @ {resolution}"):
+            m_id_dict = {}
+            for chrom in chrom_list:
+                chrom_mats = mat_dict[chrom]
+                
+                # 初始化一个稠密或稀疏矩阵来保存累加的 consensus
+                first_mat = chrom_mats[pos_indices[0]]
+                shape = first_mat.shape
+                sum_mat = np.zeros(shape, dtype=np.float32)
+
+                for idx in pos_indices:
+                    mat_sc = chrom_mats[idx]
+                    if sp.issparse(mat_sc):
+                        mat_sc_dense = mat_sc.toarray().astype(np.float32)
+                    else:
+                        mat_sc_dense = mat_sc.astype(np.float32)
+                    
+                    # 1. log1p 压制单个细胞内的异常极端高值噪声
+                    mat_sc_log = np.log1p(mat_sc_dense)
+                    
+                    # 2. 深度归一化，让每个细胞对最终结构的“投票权”均等
+                    total = mat_sc_log.sum()
+                    if total > 0:
+                        mat_sc_norm = (mat_sc_log / total) * target_sum
+                    else:
+                        mat_sc_norm = mat_sc_log
+                        
+                    sum_mat += mat_sc_norm
+                
+                # 将 consensus 存入 (这里可以转回 sparse csr_matrix 节省内存)
+                m_id_dict[chrom] = sp.csr_matrix(sum_mat)
+            all_res_dict[m_id] = m_id_dict
+
+        completed_resolutions.append(resolution)
+
+    if verbose:
+        print(f"\n✅ Consensus 聚合完成！分辨率: {sorted(completed_resolutions)}")
