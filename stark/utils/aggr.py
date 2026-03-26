@@ -2,6 +2,7 @@ import os
 import json
 import gzip
 import shutil
+import numpy as np
 import pandas as pd
 import concurrent.futures
 from tqdm import tqdm
@@ -266,7 +267,15 @@ def aggregate_metacell_mat(hdata, force_aggregate=False, verbose=True):
                 chrom_mats = mat_dict[chrom]
                 sum_mat = chrom_mats[pos_indices[0]].copy()
                 for idx in pos_indices[1:]:
-                    sum_mat += chrom_mats[idx]
+                    tmp = chrom_mats[idx].copy()
+                    non_zero_val = tmp.data  # 直接取非零值，无需转稠密
+                    if non_zero_val.size == 0:
+                        continue
+                    p_5 = np.percentile(non_zero_val, 20)
+                    tmp.data[tmp.data < p_5] = 0
+                    tmp.eliminate_zeros()
+                    sum_mat += tmp
+
                 m_id_dict[chrom] = sum_mat
             all_res_dict[m_id] = m_id_dict
 

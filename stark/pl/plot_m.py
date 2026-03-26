@@ -747,6 +747,155 @@ def plot_celltype_heatmaps(hdata, cell_type, chrom, start, end, resolution,
         plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
     plt.show()
 
+def plot_metacell_region(hdata, chrom, start, end, resolution, celltype=None, 
+                         balance=True, base_on='pair', ncols=4, named_on=None,
+                         cell_type_col='cell_type', cmap='Reds',
+                         log1p=True, fill_diagonal_zero=True,
+                         vmax=None, vmin=None, save_path=None, dpi=300, **kwargs):
+    """
+    可视化指定区域下的 Metacell Hi-C 热图 (以网格形式展示)。
+    
+    参数:
+    - hdata: 核心数据对象
+    - chrom: 染色体名称
+    - start: 起始位置
+    - end: 终止位置
+    - resolution: 分辨率
+    - celltype: 目标细胞类型名称。如果指定，则只画该细胞类型的 Metacells；如果不指定，画所有 Metacells。
+    - base_on: 'pair' (通过 mcool 读取) 或 'mat' (直接读取 views_mat 聚合结果)
+    - balance: 是否使用 balance 后的矩阵
+    - ncols: 网格每一行展示的图表数量
+    - named_on: 如果指定，则使用 hdata.metacells 中的该列属性来命名子图标题
+    - cell_type_col: hdata.metacells 中记录细胞类型的列名，默认为 'cell_type'
+    """
+    # 1. 获取要绘制的 Metacell IDs
+    if celltype is not None:
+        if not hasattr(hdata, 'metacells') or cell_type_col not in hdata.metacells.columns:
+            raise ValueError(f"hdata.metacells 中未找到列 '{cell_type_col}'，请确认存放细胞类型的列名。")
+            
+        target_obs = hdata.metacells[hdata.metacells[cell_type_col] == celltype]
+        m_ids = target_obs.index.tolist()
+        if not m_ids:
+            print(f"未找到细胞类型为 '{celltype}' 的 Metacell，请检查名称是否正确。")
+            return
+        title_prefix = f"Cell Type: {celltype}"
+    else:
+        # 画所有 metacells
+        if hasattr(hdata, 'metacells'):
+            m_ids = hdata.metacells.index.tolist()
+        elif base_on == 'pair' and 'mcool' in hdata.metacell_data:
+            m_ids = list(hdata.metacell_data['mcool'].keys())
+        elif base_on in ['mat', 'mat_redist', 'mat_consensus']:
+            str_res = str(resolution)
+            if base_on in hdata.metacell_data and str_res in hdata.metacell_data[base_on]:
+                m_ids = list(hdata.metacell_data[base_on][str_res].keys())
+            else:
+                m_ids = []
+        else:
+            m_ids = []
+            
+        if not m_ids:
+            print("未找到任何 Metacell 数据。")
+            return
+        title_prefix = "All Metacells"
+        
+    print(f"共找到 {len(m_ids)} 个 Metacells, 准备渲染...")
+    
+    if len(m_ids) > 100:
+        print(f"警告：Metacell 数量 ({len(m_ids)}) 超过 100，绘制可能较慢。")
+        
+    # 2. 初始化网格画布
+    nrows = math.ceil(len(m_ids) / ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 4, nrows * 4))
+    
+    if isinstance(axes, plt.Axes):
+        axes = [axes] # 单个子图情况
+    else:
+        axes = axes.flatten() # 展平方便遍历
+        
+    # 3. 遍历渲染子图
+    for i, m_id in enumerate(m_ids):
+        ax = axes[i]
+        ax.set_aspect('equal') # 强制子图内部坐标系严格正方形
+        
+        try:
+            if base_on == 'pair':
+                if m_id not in hdata.metacell_data.get('mcool', {}):
+                    ax.set_title(f"{m_id}\n(No mcool data)")
+                    ax.axis('off')
+                    continue
+                mcool_path = hdata.metacell_data['mcool'][m_id]
+                uri = f"{mcool_path}::/resolutions/{resolution}"
+                clr = cooler.Cooler(uri)
+                mat = clr.matrix(balance=balance).fetch((chrom, start, end))
+                
+            elif base_on in ['mat', 'mat_redist', 'mat_consensus']:
+                str_res = str(resolution)
+                dict_key = base_on
+                if dict_key not in hdata.metacell_data or str_res not in hdata.metacell_data[dict_key]:
+                    raise ValueError(f"未找到基于 {base_on} 聚合的分辨率数据。")
+                mcool_dict = hdata.metacell_data[dict_key][str_res]
+                if m_id not in mcool_dict or chrom not in mcool_dict[m_id]:
+                    ax.set_title(f"{m_id}\n(No {base_on} data)")
+                    ax.axis('off')
+                    continue
+                
+                whole_chrom_mat = mcool_dict[m_id][chrom]
+                start_bin = int(start // resolution)
+                end_bin = int(np.ceil(end / resolution))
+                max_bins = whole_chrom_mat.shape[0]
+                start_bin, end_bin = max(0, start_bin), min(max_bins, end_bin)
+                
+                import scipy.sparse as sp
+                if sp.issparse(whole_chrom_mat):
+                    mat = whole_chrom_mat.tocsr()[start_bin:end_bin, start_bin:end_bin].toarray()
+                else:
+                    mat = whole_chrom_mat[start_bin:end_bin, start_bin:end_bin]
+            else:
+                raise ValueError("base_on 必须是 'pair' 或 'mat'")
+
+            mat = np.nan_to_num(mat)
+            if log1p:
+                mat = np.log1p(mat)
+            if fill_diagonal_zero:
+                np.fill_diagonal(mat, 0)
+
+            if vmax is None:
+                if vmin is None:
+                    sns.heatmap(mat, cmap=cmap, cbar=True, ax=ax)
+                else:
+                    sns.heatmap(mat, cmap=cmap, cbar=True, ax=ax, vmin=vmin)
+            else:
+                if vmin is None:
+                    sns.heatmap(mat, cmap=cmap, cbar=True, ax=ax, vmax=vmax)
+                else:
+                    sns.heatmap(mat, cmap=cmap, cbar=True, ax=ax, vmin=vmin, vmax=vmax)
+            if named_on is not None and hasattr(hdata, 'metacells') and named_on in hdata.metacells.columns:
+                m_name = hdata.metacells.loc[m_id, named_on]
+                ax.set_title(f"{m_id} ({m_name})")
+            else:
+                ax.set_title(m_id)
+            
+            # 关闭多图展示时的冗余坐标刻度，保持画面清爽
+            ax.set_xticks([])
+            ax.set_yticks([])
+        except Exception as e:
+            ax.set_title(f"{m_id}\n(Error)")
+            ax.axis('off')
+            
+    # 4. 隐藏多余的空白子图占位
+    for j in range(len(m_ids), len(axes)):
+        axes[j].axis('off')
+        
+    # 设置主标题
+    plt.suptitle(f"{title_prefix} | Region: {chrom}:{start}-{end} @ {resolution//1000}kb", 
+                 y=1.02, fontsize=16, fontweight='bold')
+    
+    plt.tight_layout()
+    if 'save_path' in locals() and save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
+    plt.show()
+
 # ==========================================================
 # 3. 结构增强版可视化 (First-Principle O/E 校正)
 # ==========================================================

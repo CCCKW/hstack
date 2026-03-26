@@ -14,17 +14,20 @@ import os
 import h5py
 import stark as sk
 def main():
-    result = {}
+    result = pd.DataFrame(columns=['mean_purity', 'acc', 'global_score', 'wcos', 'hwis'])
 
-    pbar = tqdm(range(15,75), desc="MetaCell 数量", unit="num")
+    pbar = tqdm(range(11,40), desc="MetaCell 数量", unit="num")
     for num in pbar:
         
 
+                
+        
         lb = []
         path = '/Users/ckw/warehouse/metacell/data/test_700_snm3c'
         for val in os.listdir(path):
             if val.endswith('.pairs'):
                 lb.append(val.split('.pairs')[0].split('_')[1])
+        lb = ['ExcNeuron' if x in ['L23', 'L4', 'L5', 'L6'] else x for x in lb]
         pca_vec = np.load('/Users/ckw/warehouse/metacell/stark/test_output/pca_vec_500000.npy')
         umap_vec = np.load('/Users/ckw/warehouse/metacell/stark/test_output/umap_vec_500000.npy')
         cell_embeddings = pca_vec  # 或者 umap_vec，取决于你想用哪个作为输入
@@ -52,21 +55,26 @@ def main():
         M = model.kernel_matrix
         model.initialize_archetypes()
         model.fit(min_iter=10, max_iter=200)
-        adata.obs['metacell'] = adata.obs['SEACell'].apply(lambda x: int(x.split('-')[1]))
 
+        adata.obs['metacell'] = adata.obs['SEACell'].apply(lambda x: int(x.split('-')[1]))
         adata.obs.columns = ['label','SEAcell', 'metacell']
         adata.uns['X_pca'] = pca_vec    
         adata.uns['X_umap'] = umap_vec
+
+
 
         hdata = sk.create_hdata_from_adata(adata,
                                     data_dir="/Users/ckw/warehouse/metacell/data/test_700_snm3c",
                                 output_dir="/Users/ckw/warehouse/metacell/stark/test_output",
                                 genome_reference_path="/Users/ckw/warehouse/metacell/hg19.fa.chrom.sizes",
                                 chrom_list=[f"chr{i}" for i in range(1, 23)],
-                                resolution=500000)
+                                resolution=[500000])
         purity_df, metrics = sk.tl.evaluate(hdata, hdata.obs['label'])
-        result[num] = metrics
-    np.save('rbs_seacell.npy', result)
+# result[num] = metrics
+        vals = np.array(metrics.values())
+        print(vals)
+        result.loc[num] = vals
+    result.to_csv('seacell.csv')
     
 
 if __name__ == "__main__":

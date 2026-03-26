@@ -24,14 +24,17 @@ from tqdm import tqdm
 
 
 def main():
-    result = {}
-    pbar = tqdm(range(15,75), desc="MetaCell 数量", unit="num")
+    import pandas as pd
+    result = pd.DataFrame(columns=['mean_purity', 'acc', 'global_score', 'wcos', 'hwis'])
+    pbar = tqdm(range(11,40), desc="MetaCell 数量", unit="num")
     for num in pbar:
         lb = []
         path = '/Users/ckw/warehouse/metacell/data/test_700_snm3c'
         for val in os.listdir(path):
             if val.endswith('.pairs'):
                 lb.append(val.split('.pairs')[0].split('_')[1])
+        lb = ['ExcNeuron' if x in ['L23', 'L4', 'L5', 'L6'] else x for x in lb]
+
         pca_vec = np.load('/Users/ckw/warehouse/metacell/stark/test_output/pca_vec_500000.npy')
         umap_vec = np.load('/Users/ckw/warehouse/metacell/stark/test_output/umap_vec_500000.npy')
         cell_embeddings = pca_vec  # 或者 umap_vec，取决于你想用哪个作为输入
@@ -100,11 +103,14 @@ def main():
                                 output_dir="/Users/ckw/warehouse/metacell/stark/test_output",
                                 genome_reference_path="/Users/ckw/warehouse/metacell/hg19.fa.chrom.sizes",
                                 chrom_list=[f"chr{i}" for i in range(1, 23)],
-                                resolution=500000)
-        purity_df, metrics = sk.tl.evaluate(hdata, hdata.obs['label'])
-        result[num] = metrics
+                                resolution=[500000])
 
-    np.save('rbs_metacell.npy', result)
+        purity_df, metrics = sk.tl.evaluate(hdata, hdata.obs['label'])
+        vals = np.array(metrics.values())
+        print(vals)
+        result.loc[num] = vals
+    result.to_csv('mc2.csv')
+    
     
     
 if __name__ == "__main__":
