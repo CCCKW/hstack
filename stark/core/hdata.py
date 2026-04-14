@@ -193,7 +193,10 @@ class HData:
             if k.startswith("views_"):
                 parts = k.split("_", 2)
                 if len(parts) == 3:
-                     getattr(obj, f"views_{parts[1]}")[parts[2]] = adata.obsm[k]
+                     view_k = parts[2]
+                     if isinstance(view_k, str) and view_k.isdigit():
+                         view_k = int(view_k)
+                     getattr(obj, f"views_{parts[1]}")[view_k] = adata.obsm[k]
                      
         for k, v in adata.uns.items():
             if k.startswith("uns_"):
@@ -202,6 +205,8 @@ class HData:
                 parts = k.replace("__failed_views_", "", 1).split("_", 1)
                 if len(parts) == 2:
                      prefix, view_k = parts
+                     if isinstance(view_k, str) and view_k.isdigit():
+                         view_k = int(view_k)
                      getattr(obj, f"views_{prefix}")[view_k] = pickle.loads(v.tobytes() if hasattr(v, "tobytes") else bytes(v))
 
         model_bytes = adata.uns.get('hdata_model_bytes', None)
