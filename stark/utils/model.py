@@ -23,7 +23,7 @@ class MultiViewSEACells():
 
     变量语义:
         B: (N, K)  细胞->Metacell 归属矩阵，列稀疏(接近 one-hot)，表示每个 Metacell 的"代表点"定位
-        A: (K, N)  Metacell->细胞 聚合矩阵，行归一化(行单纯形约束 sum_n A[k,n]=1)，表示每个 Metacell 由哪些细胞组成
+        A: (K, N)  Metacell->细胞 聚合矩阵，列单纯形约束(sum_k A[k,n]=1)，表示每个细胞软分配到各 Metacell 的权重
 
     优化目标:
         L = sum_v w_v * ||M_v - M_v B A||_F^2
@@ -222,7 +222,7 @@ class MultiViewSEACells():
                 sizes = self.A.sum(axis=1)
                 print(f"Iter {iteration:3d} | Loss: {loss:.4f} | Size Range: {sizes.min():.1f}-{sizes.max():.1f} | weight: {self.view_weights}")
 
-            if self.adaptive_weight and iteration > int(iteration * 0.3):
+            if self.adaptive_weight and iteration > int(self.max_iter * 0.3):
                 self.view_weights = self._update_weights(
                     self.kernels, self.B, self.view_weights, self.weight_momentum, self.weight_method
                 )
@@ -432,7 +432,7 @@ class MultiViewSEACells():
             for i in range(n_views):
                 dists = [np.linalg.norm(MB_list[i] - MB_list[j]) for j in range(n_views) if i != j]
                 avg_distances[i] = np.mean(dists) if dists else 0.0
-            # 修正: 指数2替代原来的10
+            # 指数5：距离越大惩罚越重，快速拉开权重差异
             new_w = 1.0 / (avg_distances ** 5 + 1e-6)
             new_w /= new_w.sum()
             

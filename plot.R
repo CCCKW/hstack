@@ -16,7 +16,7 @@ setwd("/Users/ckw/warehouse/metacell/stark")
 # ==========================================
 # 【重要】请将这里的路径替换为你存放 CSV 文件的实际文件夹路径
 # 例如：csv_dir <- "C:/Users/Data/Technologies"
-csv_dir <- "/Users/ckw/warehouse/metacell/stark/benchmark"
+csv_dir <- "/Users/ckw/warehouse/metacell/stark/result_csv"
 
 # 获取该目录下所有的 .csv 文件路径
 file_list <- list.files(path = csv_dir, pattern = "\\.csv$", full.names = TRUE)
