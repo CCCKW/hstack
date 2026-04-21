@@ -16,3 +16,6 @@ benchmark/
 *.h5ad
 *.csv
 .py
+config/
+loop_pipeline/
+cycle_result_csv/
