@@ -1,60 +1,38 @@
 setwd("/Users/ckw/warehouse/metacell/stark")
-
 library(misha)
-gdb.init("/Users/ckw/warehouse/metacell/stark/schic2_mm9/trackdb")
-fends <- "/Users/ckw/warehouse/metacell/stark/schic2_mm9/seq/redb/GATC.fends"
+
+# define the genomic database we're working on
+mm9_db <- "/Users/ckw/warehouse/metacell/stark/schic2_mm9"
+gdb.init(sprintf("%s/trackdb", mm9_db))
+
+# directory where contact maps were unpacked (UPDATE to your path)
 data_dir <- "/Users/ckw/warehouse/metacell/stark/contact_maps"
+base_dir <- data_dir
+support_sge <- FALSE
 
-batch_dirs <- list.files(data_dir, full.names = T)
+# get the list of directories to work on
+dirs = list.files(data_dir)
 
-for (batch_dir in batch_dirs) {
-  cells <- list.files(batch_dir)
-  for (cell in cells) {
-    nm <- paste0("scell.nextera.", gsub("-", "_", gsub(".", "_", cell, fixed = T), fixed = T))
-    adj_path <- sprintf("%s/%s/adj", batch_dir, cell)
-    message("importing ", nm)
-    gtrack.2d.import_contacts(nm, "", adj_path, fends, allow.duplicates = F)
+# parse dirs into track names
+nms = paste0("scell.nextera.", gsub("-", "_", gsub(".", "_", dirs, fixed=T), fixed=T))
+
+# fends file is the list of GATC fragment ends
+fends = sprintf("%s/seq/redb/GATC.fends", mm9_db)
+
+# create tracks directory 
+dir.create(sprintf("%s/trackdb/tracks/scell/nextera", mm9_db), showWarnings=F, recursive=T)
+
+# uploading contact files to misha
+if (support_sge) {
+    # build the commands
+    commands = paste0("gtrack.2d.import_contacts(\"", nms, "\", \"\", \"", paste(base_dir, dirs, "adj", sep="/"), "\", fends, allow.duplicates=F)", collapse=",")
+    
+    # submit jobs to the sge cluster
+    res = eval(parse(text=paste("gcluster.run2(",commands,")")))
+}
+else {
+  # upload cell by cell
+  for (i in seq_along(nms)) {
+    gtrack.2d.import_contacts(nms[i], "", sprintf("%s/%s/adj", data_dir, dirs[i]), fends, allow.duplicates=F)
   }
 }
-
-# install.packages("devtools")
-
-
-source("/Users/ckw/warehouse/metacell/stark/paper.r")
-
-# 在source("paper.r")之后，sch_build_all之前运行这个
-0
-# 加载所有依赖
-library(gtools)
-library(plotrix)
-library(tglkmeans)
-library(misha)
-library(shaman)
-library(ggplot2)
-library(plyr)
-library(dplyr)
-library(tidyr)
-library(KernSmooth)
-library(RColorBrewer)
-
-TGLKMeans <- TGL_kmeans
-
-gcluster.run <- function(...) {
-  calls <- as.list(match.call())[-1]
-  res <- vector("list", length(calls))
-  for (i in seq_along(calls)) {
-    res[[i]] <- list(
-      retv = eval(calls[[i]], envir = parent.frame()),
-      err = NULL
-    )
-  }
-  res
-}
-
-source("paper.r")
-
-sch_batch <<- read.table("/Users/ckw/warehouse/metacell/stark/config/hyb_2i_es_batch.txt",
-  header = T, stringsAsFactors = F
-)
-
-sch_build_all(spec_params_fn = "/Users/ckw/warehouse/metacell/stark/config/hyb_2i_params.r")

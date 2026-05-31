@@ -1,1 +1,1 @@
-from .wrappers import process_and_load, cal_is
+from .wrappers import process_and_load, cal_is, add_omics_view, recompute_embedding

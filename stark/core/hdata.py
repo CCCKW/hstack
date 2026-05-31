@@ -2,43 +2,163 @@ import pandas as pd
 import numpy as np
 import os
 
+# 支持的模态类型
+MODALITY_HIC  = "hic"
+MODALITY_RNA  = "rna"
+MODALITY_METH = "meth"
+MODALITY_ATAC = "atac"
+
+
+def _make_view_key(modality: str, resolution: int = None) -> str:
+    """
+    生成标准化的视图键。
+    - HiC 带分辨率: "hic_50000"
+    - 其他组学无需分辨率: "rna", "meth"
+    - 若想给同组学区分: "rna_sample1"
+    """
+    if resolution is not None:
+        return f"{modality}_{resolution}"
+    return modality
+
+
 class HData:
     """
     Stark 多级数据容器。
-    不仅存储单细胞层次的数据 (obs, views)，还存储 Metacell 层次的数据 (metacells)。
+    支持多组学多视图 (Hi-C 多分辨率、RNA、METH、ATAC 等)。
+
+    视图键 (view key) 规范:
+        - HiC:  "hic_<分辨率>"  例如 "hic_50000"
+        - RNA:  "rna"  或带后缀 "rna_sample1"
+        - METH: "meth" 或带分辨率 "meth_50000"
+        - 兼容旧接口: 整数键 50000 => 等价于 "hic_50000"
+
+    视图配置存储在 hdata.view_configs:
+        {
+          "hic_50000": {"modality": "hic", "resolution": 50000, "data_dir": ...},
+          "rna":       {"modality": "rna", "resolution": None,  "data_dir": ...},
+        }
     """
-    def __init__(self, data_dir=None, output_dir=None, genome_reference_path=None, chrom_list=None, resolutions=None):
-        # --- 基础配置 ---
+    def __init__(self, data_dir=None, output_dir=None, genome_reference_path=None,
+                 chrom_list=None, resolutions=None):
+        # --- 基础配置 (Hi-C 主路径) ---
         self.data_dir = data_dir
         self.output_dir = output_dir
         self.genome_reference_path = genome_reference_path
         self.chrom_list = chrom_list if chrom_list is not None else []
-        self.resolutions = sorted(resolutions) 
-        
-        # --- 单细胞层次数据 ---
+        # 兼容旧 h5ad：resolutions 可能被序列化为字符串列表
+        self.resolutions = sorted(int(r) for r in resolutions) if resolutions else []
+
+        # --- 视图元信息 ---
+        # key: view_key (str), value: dict with modality/resolution/data_dir/...
+        self.view_configs = {}
+        # 自动为每个 HiC 分辨率注册视图配置
+        for res in self.resolutions:
+            vk = _make_view_key(MODALITY_HIC, res)
+            self.view_configs[vk] = {
+                "modality": MODALITY_HIC,
+                "resolution": res,
+                "data_dir": data_dir,
+            }
+
+        # --- 单细胞层次数据 (键为 view_key 字符串) ---
         self.views_pca = {}
         self.views_umap = {}
         self.views_embedding = {}
         self.views_mat = {}
         self.views_is = {}
-        self.obs = pd.DataFrame() 
-        
-        # --- Metacell 层次数据 (新增) ---
-        # metacells 存储 Metacell 的元数据 (每一行是一个 Metacell)
-        # 比如: 总深度, 包含细胞数, 优势细胞类型等
-        self.metacells = pd.DataFrame() 
-        
-        # metacell_data 存储生成的重度文件路径映射
-        # 结构: {'pairs': {id: path}, 'cool': {res: {id: path}}, 'mcool': {id: path}}
+        self.obs = pd.DataFrame()
+
+        # --- Metacell 层次数据 ---
+        self.metacells = pd.DataFrame()
         self.metacell_data = {
             'pairs': {},
             'cool': {},
             'mcool': {}
         }
-        
+
         # --- 状态与模型 ---
         self.uns = {}
         self.model = None
+
+    # ------------------------------------------------------------------
+    # 视图管理 API
+    # ------------------------------------------------------------------
+    def add_view_config(self, view_key: str, modality: str, resolution: int = None,
+                        data_dir: str = None, **kwargs):
+        """
+        注册一个新视图的元信息。
+        view_key 建议用 _make_view_key(modality, resolution) 生成。
+
+        示例:
+            hdata.add_view_config("rna", modality="rna", data_dir="/path/to/rna.h5ad")
+            hdata.add_view_config("meth_50000", modality="meth", resolution=50000,
+                                  data_dir="/path/to/meth")
+        """
+        self.view_configs[view_key] = {
+            "modality": modality,
+            "resolution": resolution,
+            "data_dir": data_dir,
+            **kwargs,
+        }
+
+    def add_view(self, view_key: str, modality: str,
+                 pca=None, umap=None, embedding=None, mat=None, is_score=None,
+                 resolution: int = None, data_dir: str = None, **kwargs):
+        """
+        一次性注册视图配置并写入对应的 views_* 数据。
+
+        参数:
+            view_key:   视图唯一标识字符串，如 "rna", "meth_50000"
+            modality:   模态类型，建议用常量 MODALITY_HIC/RNA/METH/ATAC
+            pca:        (N, d) ndarray，PCA 降维结果
+            umap:       (N, 2) ndarray，UMAP 坐标
+            embedding:  (N, d) ndarray，原始嵌入向量
+            mat:        dict {chrom: sparse_matrix}，稀疏接触矩阵 (HiC 专用)
+            is_score:   (N, bins) ndarray，绝缘分数 (HiC 专用)
+            resolution: 分辨率 (HiC/METH 有意义)
+            data_dir:   该组学的原始数据路径
+        """
+        self.add_view_config(view_key, modality=modality, resolution=resolution,
+                             data_dir=data_dir, **kwargs)
+        if pca is not None:
+            self.views_pca[view_key] = pca
+        if umap is not None:
+            self.views_umap[view_key] = umap
+        if embedding is not None:
+            self.views_embedding[view_key] = embedding
+        if mat is not None:
+            self.views_mat[view_key] = mat
+        if is_score is not None:
+            self.views_is[view_key] = is_score
+
+    def list_views(self):
+        """返回所有已注册视图的摘要 DataFrame。"""
+        rows = []
+        all_keys = set(self.view_configs) | set(self.views_pca) | \
+                   set(self.views_umap) | set(self.views_embedding) | \
+                   set(self.views_mat) | set(self.views_is)
+        for vk in sorted(all_keys, key=str):
+            cfg = self.view_configs.get(vk, {})
+            rows.append({
+                "view_key":  vk,
+                "modality":  cfg.get("modality", "unknown"),
+                "resolution": cfg.get("resolution"),
+                "has_pca":   vk in self.views_pca,
+                "has_umap":  vk in self.views_umap,
+                "has_embedding": vk in self.views_embedding,
+                "has_mat":   vk in self.views_mat,
+                "has_is":    vk in self.views_is,
+            })
+        return pd.DataFrame(rows).set_index("view_key") if rows else pd.DataFrame()
+
+    # ------------------------------------------------------------------
+    # 向后兼容: 用 int 分辨率访问 == "hic_<res>"
+    # ------------------------------------------------------------------
+    def _resolve_view_key(self, key):
+        """将 int 键 (旧接口) 自动转换为 "hic_<res>" 字符串键。"""
+        if isinstance(key, int):
+            return _make_view_key(MODALITY_HIC, key)
+        return key
 
     @property
     def n_cells(self):
@@ -50,23 +170,32 @@ class HData:
 
     def __repr__(self):
         descr = f"HData object with {self.n_cells} cells and {self.n_metacells} metacells\n"
-        descr += f"    resolutions: {self.resolutions}\n"
-        descr += f"    obs: {list(self.obs.columns)}\n"
-        descr += f"    views_pca: {list(self.views_pca.keys())}\n"
-        descr += f"    views_umap: {list(self.views_umap.keys())}\n"
-        descr += f"    views_embedding: {list(self.views_embedding.keys())}\n"
-        if hasattr(self, 'views_mat'):
-            descr += f"    views_mat: {list(self.views_mat.keys())}\n"
-        if hasattr(self, 'views_is'):
-            descr += f"    views_is: {list(self.views_is.keys())}\n"
+        descr += f"    obs columns: {list(self.obs.columns)}\n"
+
+        # 分组展示多视图信息
+        if self.view_configs:
+            descr += f"    views ({len(self.view_configs)} registered):\n"
+            for vk, cfg in self.view_configs.items():
+                mod = cfg.get("modality", "?")
+                res = cfg.get("resolution")
+                res_str = f"  res={res}" if res is not None else ""
+                has = []
+                if vk in self.views_pca:       has.append("pca")
+                if vk in self.views_umap:      has.append("umap")
+                if vk in self.views_embedding: has.append("emb")
+                if vk in self.views_mat:       has.append("mat")
+                if vk in self.views_is:        has.append("is")
+                descr += f"      [{vk}] modality={mod}{res_str}  data={has}\n"
+        else:
+            descr += f"    views_pca: {list(self.views_pca.keys())}\n"
+
         descr += f"    uns keys: {list(self.uns.keys())}\n"
-        
-        # 打印 Metacell 信息
+
         if self.n_metacells > 0:
-            descr += f"    metacells: {list(self.metacells.columns)}\n"
+            descr += f"    metacells cols: {list(self.metacells.columns)}\n"
             data_types = [k for k, v in self.metacell_data.items() if v]
-            descr += f"    metacell_data keys: {data_types}\n"
-            
+            descr += f"    metacell_data: {data_types}\n"
+
         if self.model is not None:
             descr += f"    model: MultiViewSEACells (trained: {getattr(self.model, 'initialized', False)})\n"
         return descr
@@ -115,7 +244,9 @@ class HData:
             'resolutions': getattr(self, 'resolutions', [])
         })
         adata.uns['metacell_data'] = _stringify_keys(getattr(self, 'metacell_data', {'pairs': {}, 'cool': {}, 'mcool': {}}))
-        
+        # 序列化多视图元信息
+        adata.uns['view_configs'] = _stringify_keys(getattr(self, 'view_configs', {}))
+
         if hasattr(self, 'metacells') and not self.metacells.empty:
             adata.uns['metacells'] = self.metacells
 
@@ -175,7 +306,7 @@ class HData:
             output_dir=base_attrs.get('output_dir'),
             genome_reference_path=base_attrs.get('genome_reference_path'),
             chrom_list=base_attrs.get('chrom_list'),
-            resolutions=base_attrs.get('resolutions', [])
+            resolutions=[int(r) for r in base_attrs.get('resolutions', [])]
         )
         
         obj.metacell_data = _destringify_keys(adata.uns.get('metacell_data', {'pairs': {}, 'cool': {}, 'mcool': {}}))
@@ -183,31 +314,47 @@ class HData:
         if 'metacells' in adata.uns:
              obj.metacells = adata.uns['metacells']
 
+        # 恢复 view_configs (新格式直接读取，无需 destringify)
+        raw_view_configs = adata.uns.get('view_configs', {})
+        obj.view_configs = dict(raw_view_configs)
+
         # Ensure all view dicts exist
         for prefix in ['pca', 'umap', 'embedding', 'mat', 'is']:
             if not hasattr(obj, f"views_{prefix}"):
                 setattr(obj, f"views_{prefix}", {})
-                
-        # Restore unstructured and views
+
+        def _migrate_view_key(view_k: str) -> str:
+            """将旧的纯数字字符串键 (e.g. "50000") 迁移为新格式 "hic_50000"。"""
+            if view_k.isdigit():
+                new_k = _make_view_key(MODALITY_HIC, int(view_k))
+                # 若 view_configs 中没有对应记录，补充一条
+                if new_k not in obj.view_configs:
+                    obj.view_configs[new_k] = {
+                        "modality": MODALITY_HIC,
+                        "resolution": int(view_k),
+                        "data_dir": obj.data_dir,
+                    }
+                return new_k
+            return view_k
+
+        # Restore views from obsm
         for k in list(adata.obsm.keys()):
             if k.startswith("views_"):
                 parts = k.split("_", 2)
                 if len(parts) == 3:
-                     view_k = parts[2]
-                     if isinstance(view_k, str) and view_k.isdigit():
-                         view_k = int(view_k)
-                     getattr(obj, f"views_{parts[1]}")[view_k] = adata.obsm[k]
-                     
+                    view_k = _migrate_view_key(parts[2])
+                    getattr(obj, f"views_{parts[1]}")[view_k] = adata.obsm[k]
+
         for k, v in adata.uns.items():
             if k.startswith("uns_"):
                 obj.uns[k.replace("uns_", "", 1)] = v
             elif k.startswith("__failed_views_"):
                 parts = k.replace("__failed_views_", "", 1).split("_", 1)
                 if len(parts) == 2:
-                     prefix, view_k = parts
-                     if isinstance(view_k, str) and view_k.isdigit():
-                         view_k = int(view_k)
-                     getattr(obj, f"views_{prefix}")[view_k] = pickle.loads(v.tobytes() if hasattr(v, "tobytes") else bytes(v))
+                    prefix, view_k = parts
+                    view_k = _migrate_view_key(view_k)
+                    getattr(obj, f"views_{prefix}")[view_k] = pickle.loads(
+                        v.tobytes() if hasattr(v, "tobytes") else bytes(v))
 
         model_bytes = adata.uns.get('hdata_model_bytes', None)
         if model_bytes is not None:

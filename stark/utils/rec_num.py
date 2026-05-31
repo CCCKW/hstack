@@ -51,7 +51,8 @@ def recommend_by_leiden(
     min_metacells_per_cluster: int = 1,
     resolution: float = 1.0,
     n_neighbors: int = 15,
-    plot_result: bool = True
+    plot_result: bool = True,
+    save_path = None
 ) -> Tuple[int, int]:
     """
     使用 Leiden 聚类并基于每个类的深度来推荐 metacell 数量区间。
@@ -124,6 +125,7 @@ def recommend_by_leiden(
         ax1.set_ylabel('Number of Cells', color='grey', fontsize=12)
         ax1.tick_params(axis='y', labelcolor='grey')
         plt.xticks(rotation=45)
+        plt.legend(loc='upper left')
         
         ax2 = ax1.twinx()
         
@@ -139,7 +141,11 @@ def recommend_by_leiden(
         ax2.tick_params(axis='y', labelcolor='red')
         
         plt.title(f'Metacell Allocation per Leiden Cluster (Total K = {total_min_k} ~ {total_max_k})', fontsize=14)
+        plt.legend(loc='upper right')
         fig.tight_layout()
+        if save_path is not None:
+            plt.savefig(save_path, dpi=300)
+    
         plt.show()
 
     return total_min_k, total_max_k

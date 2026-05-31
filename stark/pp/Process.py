@@ -199,10 +199,14 @@ def extract_table(config):
 	chrom_start_end = np.load(os.path.join(temp_dir, "chrom_start_end.npy"))
 	
 	print ("extracting from data_dir")
-	filelist = []
-	for val in os.listdir(data_dir):
-		if val.endswith('pairs.gz') or val.endswith('pairs'):
-			filelist.append(os.path.join(data_dir, val))
+	filelist = config.get('pair_files')
+	if filelist is None:
+		filelist = []
+		for val in os.listdir(data_dir):
+			if val.endswith('pairs.gz') or val.endswith('pairs'):
+				filelist.append(os.path.join(data_dir, val))
+	else:
+		filelist = list(filelist)
 	
 	bar = trange(len(filelist))
 	

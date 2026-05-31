@@ -5,6 +5,545 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import math
 from matplotlib.colors import LogNorm
+from ..utils.tad import compute_insulation_score
+from ..core.hdata import _make_view_key, MODALITY_HIC
+
+
+def _resolve_view_key(hdata, resolution, view_dict_name='views_umap'):
+    """
+    将 int 分辨率（旧接口）转换为 views_* 字典里实际存在的键。
+    - int 500000  -> 'hic_500000'（若存在），否则回退到直接 int
+    - str 'rna'   -> 直通
+    """
+    view_dict = getattr(hdata, view_dict_name, {})
+    if isinstance(resolution, int):
+        str_key = _make_view_key(MODALITY_HIC, resolution)
+        if str_key in view_dict:
+            return str_key
+        if resolution in view_dict:   # 向后兼容
+            return resolution
+        raise KeyError(f"{view_dict_name} 中未找到视图 '{str_key}'，"
+                       f"现有键: {list(view_dict.keys())}")
+    if resolution in view_dict:
+        return resolution
+    raise KeyError(f"{view_dict_name} 中未找到视图 '{resolution}'，"
+                   f"现有键: {list(view_dict.keys())}")
+
+
+def _fetch_metacell_region_matrix(hdata, metacell_id, chrom, start, end, resolution,
+                                  base_on='pair', balance=True):
+    """读取指定 metacell 的局部接触矩阵，失败时返回 None。"""
+    if base_on == 'pair':
+        if metacell_id not in hdata.metacell_data.get('mcool', {}):
+            return None
+        mcool_path = hdata.metacell_data['mcool'][metacell_id]
+        uri = f"{mcool_path}::/resolutions/{resolution}"
+        clr = cooler.Cooler(uri)
+        return clr.matrix(balance=balance).fetch((chrom, start, end))
+
+    if base_on in ['mat', 'mat_redist', 'mat_consensus', 'mat_EM']:
+        str_res = str(resolution)
+        if base_on not in hdata.metacell_data or str_res not in hdata.metacell_data[base_on]:
+            return None
+
+        mcool_dict = hdata.metacell_data[base_on][str_res]
+        if metacell_id not in mcool_dict or chrom not in mcool_dict[metacell_id]:
+            return None
+
+        whole_chrom_mat = mcool_dict[metacell_id][chrom]
+        start_bin = int(start // resolution)
+        end_bin = int(np.ceil(end / resolution))
+        max_bins = whole_chrom_mat.shape[0]
+        start_bin, end_bin = max(0, start_bin), min(max_bins, end_bin)
+
+        import scipy.sparse as sp
+        if sp.issparse(whole_chrom_mat):
+            return whole_chrom_mat.tocsr()[start_bin:end_bin, start_bin:end_bin].toarray()
+        return whole_chrom_mat[start_bin:end_bin, start_bin:end_bin]
+
+    raise ValueError("base_on 必须是 'pair'、'mat'、'mat_redist'、'mat_consensus' 或 'mat_EM'")
+
+
+def _plot_upper_triangle_rot45(ax, mat, cmap='Reds', vmin=None, vmax=None):
+    """绘制上三角 45 度旋转热图（主对角线与水平线平行）。"""
+    mat = np.asarray(mat, dtype=float)
+    n = mat.shape[0]
+    if mat.ndim != 2 or mat.shape[0] != mat.shape[1]:
+        raise ValueError("输入矩阵必须是方阵。")
+
+    # 仅保留上三角（含对角线）
+    upper = mat.copy()
+    upper[np.tril_indices(n, k=-1)] = np.nan
+
+    # 将(i, j)映射到旋转坐标: x=(i+j)/2, y=(j-i)/2
+    i_edge, j_edge = np.meshgrid(np.arange(n + 1), np.arange(n + 1), indexing='ij')
+    x_edge = (i_edge + j_edge) / 2.0
+    y_edge = (j_edge - i_edge) / 2.0
+
+    mappable = ax.pcolormesh(x_edge, y_edge, upper, shading='flat', cmap=cmap, vmin=vmin, vmax=vmax)
+    ax.set_xlim(0, n)
+    ax.set_ylim(-0.5, n / 2.0)
+    ax.set_aspect('equal')
+    ax.margins(x=0, y=0)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    return mappable
+
+
+def _fill_nan_nearest_1d(arr):
+    """使用最近邻填充一维数组中的 NaN，保证色带不出现断裂空白。"""
+    out = np.asarray(arr, dtype=float).copy()
+    n = out.shape[0]
+    if n == 0:
+        return out
+
+    valid = ~np.isnan(out)
+    if not np.any(valid):
+        return np.zeros_like(out)
+
+    first_valid = np.where(valid)[0][0]
+    last_valid = np.where(valid)[0][-1]
+    out[:first_valid] = out[first_valid]
+    out[last_valid + 1:] = out[last_valid]
+
+    for i in range(first_valid + 1, last_valid + 1):
+        if np.isnan(out[i]):
+            out[i] = out[i - 1]
+
+    for i in range(last_valid - 1, first_valid - 1, -1):
+        if np.isnan(out[i]):
+            out[i] = out[i + 1]
+
+    return out
+
+
+def plot_celltype_triangle_heatmaps(
+    hdata,
+    cell_type,
+    chrom,
+    start,
+    end,
+    resolution,
+    balance=True,
+    base_on='pair',
+    ncols=4,
+    cell_type_col='cell_type',
+    cmap='Reds',
+    log1p=True,
+    fill_diagonal_zero=True,
+    vmax=None,
+    vmin=None,
+    ins_window=10,
+    ins_normalize=True,
+    ins_flank_bins=0,
+    ins_cmap='coolwarm',
+    ins_vmin=None,
+    ins_vmax=None,
+    strip_height=0.22,
+    strip_gap=0.0,
+    save_path=None,
+    dpi=300,
+):
+    """
+        绘制指定细胞类型下全部 Metacell 的“上三角旋转 45 度”热图，并在下方叠加 insulation score 色块条带。
+
+    每个 metacell 子图由两部分组成:
+    1) 上部: 仅显示上三角接触矩阵，旋转后主对角线为水平线
+        2) 下部: 相同区域的 insulation score 色块（每个 bin 一格）
+
+        说明:
+        - 为避免边界效应导致长度错位，可设置 ins_flank_bins > 0，
+            即先在 [start-flank, end+flank] 上计算 IS，再裁剪回 [start, end]。
+        - strip_height 控制 IS 条带厚度（相对比例）。
+        - strip_gap 控制三角热图与 IS 条带的间距（相对三角图高度）。
+            正值更远，0 为紧贴，负值更近（可轻微重叠）。
+    """
+    if not hasattr(hdata, 'metacells') or cell_type_col not in hdata.metacells.columns:
+        raise ValueError(f"hdata.metacells 中未找到列 '{cell_type_col}'，请确认存放细胞类型的列名。")
+
+    target_obs = hdata.metacells[hdata.metacells[cell_type_col] == cell_type]
+    m_ids = target_obs.index.tolist()
+    if not m_ids:
+        print(f"未找到细胞类型为 '{cell_type}' 的 Metacell，请检查名称是否正确。")
+        return
+
+    print(f"共找到 {len(m_ids)} 个属于 '{cell_type}' 的 Metacells, 准备渲染三角热图与 insulation 色块...")
+
+    nrows = math.ceil(len(m_ids) / ncols)
+    fig = plt.figure(figsize=(ncols * 4.4, nrows * 4.4))
+    outer = fig.add_gridspec(nrows, ncols, wspace=0.25, hspace=0.35)
+
+    last_mappable = None
+    last_ins_mappable = None
+
+    for i, m_id in enumerate(m_ids):
+        r, c = divmod(i, ncols)
+        # 使用 height_ratios 和 hspace 精确控制子图大小和间距
+        hm_ratio = 4.0
+        strip_ratio = max(0.02, float(strip_height))
+        hm_to_strip_gap = float(strip_gap) * hm_ratio  # 转换间距为比例
+        inner = outer[r, c].subgridspec(
+            2, 1,
+            height_ratios=[hm_ratio, strip_ratio],
+            hspace=hm_to_strip_gap
+        )
+        ax_hm = fig.add_subplot(inner[0])
+        ax_ins = fig.add_subplot(inner[1], sharex=ax_hm)
+
+        try:
+            mat = _fetch_metacell_region_matrix(
+                hdata,
+                metacell_id=m_id,
+                chrom=chrom,
+                start=start,
+                end=end,
+                resolution=resolution,
+                base_on=base_on,
+                balance=balance,
+            )
+            if mat is None:
+                ax_hm.set_title(f"{m_id} (No data)")
+                ax_hm.axis('off')
+                ax_ins.axis('off')
+                continue
+
+            mat = np.nan_to_num(np.asarray(mat, dtype=float))
+            if log1p:
+                mat = np.log1p(mat)
+            if fill_diagonal_zero:
+                np.fill_diagonal(mat, 0)
+
+            last_mappable = _plot_upper_triangle_rot45(
+                ax_hm,
+                mat,
+                cmap=cmap,
+                vmin=vmin,
+                vmax=vmax,
+            )
+            ax_hm.set_title(str(m_id), fontsize=10)
+
+            n_bins = mat.shape[0]
+
+            # 可选：使用扩展区间计算 IS，再裁剪到目标区间，保证与主图长度对齐
+            # 至少扩展到 ins_window，减少边界 NaN。
+            flank_bins_effective = max(int(ins_flank_bins), int(ins_window))
+            if flank_bins_effective > 0:
+                ext_start = max(0, int(start - flank_bins_effective * resolution))
+                ext_end = int(end + flank_bins_effective * resolution)
+                ext_mat = _fetch_metacell_region_matrix(
+                    hdata,
+                    metacell_id=m_id,
+                    chrom=chrom,
+                    start=ext_start,
+                    end=ext_end,
+                    resolution=resolution,
+                    base_on=base_on,
+                    balance=balance,
+                )
+
+                if ext_mat is not None:
+                    ext_mat = np.nan_to_num(np.asarray(ext_mat, dtype=float))
+                    if log1p:
+                        ext_mat = np.log1p(ext_mat)
+                    if fill_diagonal_zero:
+                        np.fill_diagonal(ext_mat, 0)
+
+                    ins_ext = compute_insulation_score(ext_mat, window=ins_window, normalize=ins_normalize)
+                    start_offset = int((start - ext_start) // resolution)
+                    ins = ins_ext[start_offset:start_offset + n_bins]
+                else:
+                    ins = compute_insulation_score(mat, window=ins_window, normalize=ins_normalize)
+            else:
+                ins = compute_insulation_score(mat, window=ins_window, normalize=ins_normalize)
+
+            # 兜底: 保证 IS 长度与热图对角线长度一致
+            if len(ins) < n_bins:
+                pad = np.full(n_bins - len(ins), np.nan)
+                ins = np.concatenate([ins, pad])
+            elif len(ins) > n_bins:
+                ins = ins[:n_bins]
+
+            # 将边界 NaN 连续填充，避免色块看起来“变短”
+            ins = _fill_nan_nearest_1d(ins)
+
+            # 下方使用“每 bin 一格”的色块展示 IS
+            # 使用 pcolormesh 按 bin 边界渲染，确保与上图 x 轴严格一致
+            x_edges = np.arange(n_bins + 1)
+            y_edges = np.array([0.0, 1.0])
+            ins_strip = ins[np.newaxis, :]
+            last_ins_mappable = ax_ins.pcolormesh(
+                x_edges,
+                y_edges,
+                ins_strip,
+                shading='flat',
+                cmap=ins_cmap,
+                vmin=ins_vmin,
+                vmax=ins_vmax,
+                antialiased=False,
+            )
+            ax_ins.set_xlim(0, n_bins)
+            ax_ins.set_ylim(0, 1)
+            ax_ins.margins(x=0, y=0)
+            ax_ins.tick_params(axis='x', labelbottom=False)
+            ax_ins.set_yticks([])
+            ax_ins.spines['top'].set_visible(False)
+            ax_ins.spines['right'].set_visible(False)
+            ax_ins.spines['left'].set_visible(False)
+            ax_ins.set_ylabel('IS', fontsize=8, rotation=0, labelpad=8)
+
+        except Exception:
+            ax_hm.set_title(f"{m_id} (Error)")
+            ax_hm.axis('off')
+            ax_ins.axis('off')
+
+    # 隐藏多余网格
+    for j in range(len(m_ids), nrows * ncols):
+        rr, cc = divmod(j, ncols)
+        ax_empty = fig.add_subplot(outer[rr, cc])
+        ax_empty.axis('off')
+
+    if last_mappable is not None:
+        cbar = fig.colorbar(last_mappable, ax=fig.axes, shrink=0.45, pad=0.01)
+        cbar.ax.tick_params(labelsize=8)
+
+    if last_ins_mappable is not None:
+        # 给 IS 条带单独加一个横向 colorbar，避免和主热图 colorbar 混淆。
+        cax_ins = fig.add_axes([0.12, 0.03, 0.35, 0.015])
+        cbar_ins = fig.colorbar(last_ins_mappable, cax=cax_ins, orientation='horizontal')
+        cbar_ins.ax.tick_params(labelsize=8)
+        cbar_ins.set_label('IS', fontsize=8)
+
+    fig.suptitle(
+        f"Triangle Heatmap + Insulation | Cell Type: {cell_type} | {chrom}:{start}-{end} @ {resolution//1000}kb",
+        y=1.01,
+        fontsize=14,
+        fontweight='bold',
+    )
+    plt.tight_layout(rect=[0, 0.08, 1, 0.98])
+
+    if save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
+    plt.show()
+
+
+def plot_metacell_insulation_strips(
+    hdata,
+    chrom,
+    start,
+    end,
+    resolution,
+    balance=True,
+    base_on='pair',
+    cell_type_col='cell_type',
+    metacell_order=None,
+    ins_window=10,
+    ins_normalize=True,
+    ins_flank_bins=0,
+    log1p=True,
+    fill_diagonal_zero=True,
+    ins_cmap='coolwarm',
+    ins_vmin=None,
+    ins_vmax=None,
+    row_height=0.3,
+    label_fontsize=9,
+    show_colorbar=True,
+    figsize=None,
+    save_path=None,
+    dpi=300,
+):
+    """
+    将多个 Metacell 的 insulation score 堆叠为一张 heatmap 展示。
+
+    所有行组成一个矩阵，用单次 pcolormesh 渲染，无行间间隔。
+    Y 轴标签为细胞类型，同类型的行共用一个居中标签。
+
+    Parameters
+    ----------
+    hdata : HiCData
+        含有 metacells 属性的数据对象。
+    chrom, start, end, resolution : 基因组区间参数。
+    balance : bool
+        是否使用 balanced 矩阵。
+    base_on : str
+        矩阵来源。
+    cell_type_col : str
+        hdata.metacells 中存储细胞类型的列名。
+    metacell_order : list or None
+        指定 metacell id 的顺序列表（从上到下）。
+        若为 None，自动按 cell_type_col 分组排序。
+    ins_window : int
+        insulation score 计算窗口大小（bin 数）。
+    ins_normalize : bool
+        是否对 insulation score 归一化。
+    ins_flank_bins : int
+        额外扩展 bins 数，用于减少边界 NaN（至少取 ins_window）。
+    log1p : bool
+        读取矩阵时是否 log1p 变换。
+    fill_diagonal_zero : bool
+        是否将对角线置零。
+    ins_cmap : str
+        IS 色块 colormap。
+    ins_vmin, ins_vmax : float or None
+        IS colormap 的上下界，None 则自动从数据范围推断。
+    row_height : float
+        每行的高度（英寸），默认 0.3。
+    label_fontsize : int
+        Y 轴细胞类型标签的字体大小。
+    show_colorbar : bool
+        是否显示 colorbar。
+    figsize : tuple or None
+        图像尺寸，None 则自动推断。
+    save_path : str or None
+        保存路径。
+    dpi : int
+        保存分辨率。
+    """
+    if not hasattr(hdata, 'metacells'):
+        raise ValueError("hdata 没有 metacells 属性，请检查数据。")
+
+    # 确定 metacell 顺序
+    if metacell_order is not None:
+        m_ids = list(metacell_order)
+    else:
+        if cell_type_col in hdata.metacells.columns:
+            m_ids = hdata.metacells.sort_values(cell_type_col).index.tolist()
+        else:
+            m_ids = hdata.metacells.index.tolist()
+
+    n_strips = len(m_ids)
+    if n_strips == 0:
+        print("没有可用的 Metacell。")
+        return
+
+    # id -> 细胞类型映射
+    id_to_ct = {}
+    if cell_type_col in hdata.metacells.columns:
+        id_to_ct = hdata.metacells[cell_type_col].to_dict()
+
+    # 基因组参数
+    n_bins = int((end - start) // resolution)
+    flank_bins_effective = max(int(ins_flank_bins), int(ins_window))
+    ext_start = max(0, int(start - flank_bins_effective * resolution))
+    ext_end = int(end + flank_bins_effective * resolution)
+    start_offset = int((start - ext_start) // resolution)
+
+    # 收集所有 IS，组成矩阵 (n_strips x n_bins)
+    all_ins = []
+    for m_id in m_ids:
+        try:
+            ext_mat = _fetch_metacell_region_matrix(
+                hdata, metacell_id=m_id, chrom=chrom,
+                start=ext_start, end=ext_end, resolution=resolution,
+                base_on=base_on, balance=balance,
+            )
+            if ext_mat is None:
+                all_ins.append(np.full(n_bins, np.nan))
+                continue
+            ext_mat = np.nan_to_num(np.asarray(ext_mat, dtype=float))
+            if log1p:
+                ext_mat = np.log1p(ext_mat)
+            if fill_diagonal_zero:
+                np.fill_diagonal(ext_mat, 0)
+            ins_ext = compute_insulation_score(ext_mat, window=ins_window, normalize=ins_normalize)
+            ins = ins_ext[start_offset:start_offset + n_bins]
+            if len(ins) < n_bins:
+                ins = np.concatenate([ins, np.full(n_bins - len(ins), np.nan)])
+            elif len(ins) > n_bins:
+                ins = ins[:n_bins]
+            ins = _fill_nan_nearest_1d(ins)
+        except Exception:
+            ins = np.full(n_bins, np.nan)
+        all_ins.append(ins)
+
+    mat2d = np.vstack(all_ins)  # shape: (n_strips, n_bins)
+
+    # 全局 vmin/vmax
+    if ins_vmin is None or ins_vmax is None:
+        flat = mat2d[~np.isnan(mat2d)]
+        if ins_vmin is None:
+            ins_vmin = float(np.nanmin(flat)) if len(flat) else -1
+        if ins_vmax is None:
+            ins_vmax = float(np.nanmax(flat)) if len(flat) else 1
+
+    # 图像尺寸
+    if figsize is None:
+        fig_w = max(8, min(24, n_bins * 0.08))
+        fig_h = max(2, n_strips * row_height + 1.0)
+        figsize = (fig_w, fig_h)
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    x_edges = np.arange(n_bins + 1)
+    y_edges = np.arange(n_strips + 1)  # 0..n_strips，每行占 1 个单位
+
+    mappable = ax.pcolormesh(
+        x_edges, y_edges, mat2d,
+        shading='flat',
+        cmap=ins_cmap,
+        vmin=ins_vmin,
+        vmax=ins_vmax,
+        antialiased=False,
+    )
+    ax.set_xlim(0, n_bins)
+    ax.set_ylim(0, n_strips)
+    ax.margins(x=0, y=0)
+    ax.invert_yaxis()  # 第一行在上方
+
+    # Y 轴：按细胞类型分组，每组居中显示一个标签
+    ct_list = [id_to_ct.get(m, '') for m in m_ids]
+    # 找出每个细胞类型组的起止行，计算居中位置
+    group_ticks = []   # tick 位置（行中心）
+    group_labels = []  # 标签
+    i = 0
+    while i < n_strips:
+        ct = ct_list[i]
+        j = i + 1
+        while j < n_strips and ct_list[j] == ct:
+            j += 1
+        center = (i + j) / 2.0  # 中心（已 invert，坐标仍为正向 0..n_strips）
+        group_ticks.append(center)
+        group_labels.append(ct if ct else str(m_ids[i]))
+        i = j
+
+    ax.set_yticks(group_ticks)
+    ax.set_yticklabels(group_labels, fontsize=label_fontsize)
+    ax.tick_params(axis='y', length=0)  # 不显示刻度线
+
+    # 在细胞类型边界画分隔线
+    boundaries = set()
+    for k in range(1, n_strips):
+        if ct_list[k] != ct_list[k - 1]:
+            boundaries.add(k)
+    for b in boundaries:
+        ax.axhline(b, color='white', linewidth=1.5, lw=1.5)
+
+    # X 轴坐标
+    tick_positions = np.linspace(0, n_bins, min(10, n_bins + 1), dtype=int)
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels(
+        [f"{(start + t * resolution) // 1000}kb" for t in tick_positions],
+        rotation=30, ha='right', fontsize=8,
+    )
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    if show_colorbar:
+        cbar = fig.colorbar(mappable, ax=ax, shrink=0.5, pad=0.02)
+        cbar.set_label('IS', fontsize=9)
+        cbar.ax.tick_params(labelsize=8)
+
+    ax.set_title(
+        f"Insulation Score Heatmap | {chrom}:{start}-{end} @ {resolution // 1000}kb",
+        fontsize=11, fontweight='bold',
+    )
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
+    plt.show()
+
+
 def plot_basic_purity(hdata,figsize=(8, 6), save_path=None, dpi=300):
     """可视化 1: 基础纯度柱状图"""
     purity_df = hdata.uns['purity_df']
@@ -144,7 +683,7 @@ def plot_umap_assignment(hdata,resolution=None,  figsize=(7,7), save_path=None, 
     
     labels = hdata.obs['label'].values
     
-    umap_coords = hdata.views_umap[resolution]
+    umap_coords = hdata.views_umap[_resolve_view_key(hdata, resolution, 'views_umap')]
     
     sns.set_theme(style="whitegrid")
     fig = plt.figure(figsize=figsize)
@@ -169,7 +708,7 @@ def plot_umap_comparison(hdata, resolution=None,  figsize=(14, 6), save_path=Non
         if resolution is None:
             raise ValueError("请提供 resolution 参数以获取对应的 UMAP 坐标")
 
-        umap_coords = hdata.views_umap[resolution]
+        umap_coords = hdata.views_umap[_resolve_view_key(hdata, resolution, 'views_umap')]
         
         sns.set_theme(style="whitegrid")
         fig, ax = plt.subplots(1, 2, figsize=figsize)
@@ -225,7 +764,7 @@ def plot_metacell_sizes(hdata, figsize=(8, 6), bins=20, save_path=None, dpi=300)
 def plot_initialization(hdata, resolution=None, title="Initialization Waypoints",figsize=(8, 6), save_path=None, dpi=300):
     if resolution is None:
         raise ValueError("请提供 resolution 参数以获取对应的 UMAP 坐标")
-    umap_coords = hdata.views_umap[resolution]
+    umap_coords = hdata.views_umap[_resolve_view_key(hdata, resolution, 'views_umap')]
     
     waypoints = hdata.model.waypoints
     
@@ -244,7 +783,7 @@ def plot_specific_metacell(hdata, metacell_id,resolution=None, figsize=(8, 6), s
     if resolution is None:
         raise ValueError("请提供 resolution 参数以获取对应的 UMAP 坐标")
     labels = hdata.obs['metacell'].values
-    umap_coords = hdata.views_umap[resolution]
+    umap_coords = hdata.views_umap[_resolve_view_key(hdata, resolution, 'views_umap')]
     indices = np.where(labels == metacell_id)[0]
     
     plt.figure(figsize=figsize)
@@ -271,7 +810,7 @@ def plot_metacells(hdata,resolution=None, title="Final Metacell Positions", min_
     if resolution is None:
         raise ValueError("请提供 resolution 参数以获取对应的 UMAP 坐标")
     labels = hdata.obs['metacell']
-    umap_coords = hdata.views_umap[resolution]
+    umap_coords = hdata.views_umap[_resolve_view_key(hdata, resolution, 'views_umap')]
     metacell_coords = []
     metacell_counts = []
     present_indices = np.unique(labels)
@@ -325,7 +864,7 @@ def plot_metacells(hdata,resolution=None, title="Final Metacell Positions", min_
     plt.show()
 
 
-def plot_metacells2(hdata, resolution=None, title="Final Metacell Positions", min_size=50, max_size=500, show_idx=False, label_col='label', cell_alpha=0.3, metacell_alpha=0.8, save_path=None, dpi=300):
+def plot_metacells2(hdata, resolution=None, title="Final Metacell Positions", min_size=50, max_size=500, show_idx=False, show_count=False, label_col='label', cell_alpha=0.3, metacell_alpha=0.8, save_path=None, dpi=300):
     """
     可视化 Metacell 在 UMAP 上的位置，并用主导细胞类型 (dominant label) 染色，
     同时将底层的单细胞也一并着色展示。
@@ -333,7 +872,7 @@ def plot_metacells2(hdata, resolution=None, title="Final Metacell Positions", mi
     if resolution is None:
         raise ValueError("请提供 resolution 参数以获取对应的 UMAP 坐标")
     labels = hdata.obs['metacell']
-    umap_coords = hdata.views_umap[resolution]
+    umap_coords = hdata.views_umap[_resolve_view_key(hdata, resolution, 'views_umap')]
     metacell_coords = []
     metacell_counts = []
     metacell_dominant_labels = []
@@ -416,6 +955,10 @@ def plot_metacells2(hdata, resolution=None, title="Final Metacell Positions", mi
         for i, k in enumerate(present_indices):
             plt.text(metacell_coords[i, 0], metacell_coords[i, 1], str(k), 
                         fontsize=10, ha='center', va='center', color='black', fontweight='bold', zorder=20)
+    elif show_count:
+        for i, cnt in enumerate(metacell_counts):
+            plt.text(metacell_coords[i, 0], metacell_coords[i, 1], str(cnt),
+                        fontsize=8, ha='center', va='center', color='black', fontweight='bold', zorder=20)
     
     plt.title(f"{title}\n(Metacells: {len(metacell_coords)}, Count Range: {min_c}-{max_c})")
     plt.axis('off')
@@ -567,9 +1110,8 @@ def plot_cell_of_metacell_heatmap(hdata, metacell_id, cell_id, chrom, start, end
     elif base_on in ['mat', 'mat_redist', 'mat_consensus']:
         if not hdata.views_mat:
             raise ValueError("hdata.views_mat 为空，请确认已运行预处理。")
-        if resolution not in hdata.views_mat:
-            raise ValueError(f"未找到分辨率 {resolution} 的 views_mat 数据。")
-        if chrom not in hdata.views_mat[resolution]:
+        _vk = _resolve_view_key(hdata, resolution, 'views_mat')
+        if chrom not in hdata.views_mat[_vk]:
             raise ValueError(f"未找到染色体 {chrom} 的 views_mat 数据。")
             
         try:
@@ -580,7 +1122,7 @@ def plot_cell_of_metacell_heatmap(hdata, metacell_id, cell_id, chrom, start, end
             else:
                 raise ValueError(f"Cell ID '{cell_id}' 不在 hdata.obs.index 中。")
                 
-        whole_chrom_mat = hdata.views_mat[resolution][chrom][cell_idx]
+        whole_chrom_mat = hdata.views_mat[_vk][chrom][cell_idx]
         start_bin = int(start // resolution)
         end_bin = int(np.ceil(end / resolution))
         max_bins = whole_chrom_mat.shape[0]
@@ -1071,9 +1613,8 @@ def plot_cell_of_metacell_heatmap_enhanced(hdata, metacell_id, cell_id, chrom, s
     elif base_on == 'mat' or base_on == 'mat_redist':
         if not hdata.views_mat:
             raise ValueError("hdata.views_mat 为空，请确认已运行预处理。")
-        if resolution not in hdata.views_mat:
-            raise ValueError(f"未找到分辨率 {resolution} 的 views_mat 数据。")
-        if chrom not in hdata.views_mat[resolution]:
+        _vk = _resolve_view_key(hdata, resolution, 'views_mat')
+        if chrom not in hdata.views_mat[_vk]:
             raise ValueError(f"未找到染色体 {chrom} 的 views_mat 数据。")
             
         try:
@@ -1084,7 +1625,7 @@ def plot_cell_of_metacell_heatmap_enhanced(hdata, metacell_id, cell_id, chrom, s
             else:
                 raise ValueError(f"Cell ID '{cell_id}' 不在 hdata.obs.index 中。")
                 
-        whole_chrom_mat = hdata.views_mat[resolution][chrom][cell_idx]
+        whole_chrom_mat = hdata.views_mat[_vk][chrom][cell_idx]
         start_bin = int(start // resolution)
         end_bin = int(np.ceil(end / resolution))
         max_bins = whole_chrom_mat.shape[0]

@@ -4,6 +4,27 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import normalize
 from sklearn.metrics import pairwise_distances
+from stark.core.hdata import _make_view_key, MODALITY_HIC
+
+
+def _resolve_pca_view(hdata, key):
+    """
+    将 int 分辨率键或字符串键统一解析为 views_pca 里实际存在的键。
+    - int 500000  -> 先尝试 'hic_500000'，再回退到直接 int
+    - str 'rna'   -> 直接用
+    """
+    if isinstance(key, int):
+        str_key = _make_view_key(MODALITY_HIC, key)
+        if str_key in hdata.views_pca:
+            return str_key
+        # 向后兼容：万一仍是 int 键
+        if key in hdata.views_pca:
+            return key
+        raise KeyError(f"views_pca 中未找到视图 '{str_key}'（也没有旧式 int 键 {key}），"
+                       f"现有键: {list(hdata.views_pca.keys())}")
+    if key in hdata.views_pca:
+        return key
+    raise KeyError(f"views_pca 中未找到视图 '{key}'，现有键: {list(hdata.views_pca.keys())}")
 
 
 def evaluate_metacell(hdata, use_view=None, metric="euclidean"):
@@ -25,11 +46,10 @@ def evaluate_metacell(hdata, use_view=None, metric="euclidean"):
 
     # 1. 尝试获取降维坐标矩阵
     if use_view is None:
-        coords = list(hdata.views_pca.values())[0]
         used_view_name = list(hdata.views_pca.keys())[0]
     else:
-        coords = hdata.views_pca[use_view]
-        used_view_name = use_view
+        used_view_name = _resolve_pca_view(hdata, use_view)
+    coords = hdata.views_pca[used_view_name]
 
     print(f"使用的特征视图: {used_view_name} (距离度量: {metric})")
 
@@ -205,6 +225,8 @@ def recommend_metacell_num(
     resolution_param=2.0,
     n_neighbors=15,
     ref_view=1000000,
+    plot_result=True,
+    save_path = None
 ):
     """
     步骤 2: 推荐 MetaCell 范围并保存到 hdata
@@ -215,11 +237,14 @@ def recommend_metacell_num(
 
     min_k, max_k = recommend_by_leiden(
         depth_array=depth_array,
-        features=hdata.views_pca[ref_view],
+        features=hdata.views_pca[_resolve_pca_view(hdata, ref_view)],
         target_depth_min=target_depth_min,
         target_depth_max=target_depth_max,
         resolution=resolution_param,
         n_neighbors=n_neighbors,
+        plot_result=plot_result,
+        save_path=save_path
+        
     )
 
     # 将推荐的范围保存到非结构化字典中备用
@@ -240,26 +265,64 @@ def init_model(hdata, n_metacells, **kwargs):
     print(f"✅ 模型参数初始化完成，目标 MetaCell 数量: {n_metacells}")
 
 
-def compute_kernels(hdata):
+def compute_kernels(hdata, use_views=None):
     """
-    步骤 4: 计算核矩阵
-    严格按照您 pipe.py 中的顺序输入: 100K, 500K, 1M (对应 view1, view2, view3)
+    步骤 4: 计算核矩阵，将选定视图的 PCA 矩阵分别建 RBF 核传给模型。
+
+    参数:
+        use_views: 控制哪些视图参与核矩阵计算。
+            None (默认) — 只使用 modality='hic' 的视图（原始行为）
+            'all'       — hdata.views_pca 中所有视图都参与（含 RNA/METH/ATAC）
+            list[str]   — 指定视图键列表，如 ['hic_50000', 'hic_500000', 'rna']
+
+    示例:
+        sk.tl.compute_kernels(hdata)                          # 仅 HiC
+        sk.tl.compute_kernels(hdata, use_views='all')         # 所有视图
+        sk.tl.compute_kernels(hdata, use_views=['hic_500000', 'rna'])  # 指定
     """
     if hdata.model is None:
         raise ValueError("模型尚未初始化，请先运行 sk.tl.init_model(hdata, ...)")
 
-    pca_list = list(hdata.views_pca.values())
-    pca_list = [normalize(pca, norm="l2", axis=1) for pca in pca_list]
+    if use_views is None:
+        # 默认：只用 hic 模态
+        selected_keys = [
+            k for k in hdata.views_pca
+            if hdata.view_configs.get(k, {}).get('modality', MODALITY_HIC) == MODALITY_HIC
+        ]
+        if not selected_keys:
+            # 无配置信息时全部使用（兼容旧数据）
+            selected_keys = list(hdata.views_pca.keys())
+    elif use_views == 'all':
+        selected_keys = list(hdata.views_pca.keys())
+    else:
+        # 用户显式指定，做存在性校验
+        missing = [k for k in use_views if k not in hdata.views_pca]
+        if missing:
+            raise KeyError(f"以下视图在 hdata.views_pca 中不存在: {missing}\n"
+                           f"现有视图: {list(hdata.views_pca.keys())}")
+        selected_keys = list(use_views)
+
+    pca_list = [normalize(hdata.views_pca[k], norm="l2", axis=1) for k in selected_keys]
+    # 将实际使用的视图键记录到 uns，供后续查看
+    hdata.uns['kernel_views'] = selected_keys
+    print(f"  参与核矩阵计算的视图 ({len(selected_keys)} 个): {selected_keys}")
 
     # 完全调用底层的核矩阵计算
     hdata.model.compute_kernels(pca_list, save_dir=None)
 
 
+
 def initialize_waypoints(
-    hdata, data_type="pca", seed=32, n_micro_clusters=None, ref_view_res=500000
+    hdata, data_type="pca", seed=32, n_micro_clusters=None, ref_view_res=500000,
+    init_method='minibatch_fps'
 ):
     """
     步骤 5: 模型 initialize + 顺带调用其可视化确认 waypoint
+
+    init_method: waypoint 初始化策略
+        'minibatch_fps' (默认): MiniBatchKMeans 微簇 + FPS (本算法)
+        'greedy_fps'          : 直接全局贪心 FPS (SEACells 风格)
+        'random'              : 随机均匀采样 (基线)
     """
     if hdata.model is None:
         raise ValueError("模型尚未初始化")
@@ -269,7 +332,8 @@ def initialize_waypoints(
 
     # 调用底层 initialize
     hdata.model.initialize(
-        seed=seed, data_type=data_type, n_micro_clusters=n_micro_clusters
+        seed=seed, data_type=data_type, n_micro_clusters=n_micro_clusters,
+        init_method=init_method
     )
 
     # 按照您的流程，这一步直接出图确认

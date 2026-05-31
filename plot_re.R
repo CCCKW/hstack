@@ -14,7 +14,7 @@ setwd("/Users/ckw/warehouse/metacell/stark")
 # ==========================================
 # 2. 批量读取 CSV 并求均值
 # ==========================================
-csv_dir <- "/Users/ckw/warehouse/metacell/stark/cycle_reuslt_csv"
+csv_dir <- "/Users/ckw/warehouse/metacell/stark/snm3c_reuslt_csv"
 
 file_list <- list.files(path = csv_dir, pattern = "\\.csv$", full.names = TRUE)
 

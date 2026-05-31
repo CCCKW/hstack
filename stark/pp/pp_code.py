@@ -53,6 +53,33 @@ def load_data(file_path, n_chrom=19, n_components=0.75, random_state=42, scaler_
     
     return pca_vec, umap_vec, embedding
 
+def _resolve_data_dir(data_dir, temp_dir):
+    """若 data_dir 是文件列表，则软链到 temp_dir/pairs_link 并返回该目录；否则原样返回。"""
+    if not (data_dir.endswith('.txt') or data_dir.endswith('.txt.gz')):
+        return data_dir
+    link_dir = os.path.join(temp_dir, "pairs_link")
+    os.makedirs(link_dir, exist_ok=True)
+    files = pd.read_csv(data_dir, header=None)[0].tolist()
+    for fp in files:
+        dst = os.path.join(link_dir, os.path.basename(fp))
+        if not os.path.exists(dst):
+            os.symlink(os.path.abspath(fp), dst)
+    return link_dir
+
+
+def _collect_pair_files(data_dir):
+    """返回待处理的 pairs 文件路径列表。txt/txt.gz 按行读取，目录则扫描后缀。"""
+    if data_dir.endswith('.txt') or data_dir.endswith('.txt.gz'):
+        print("Data directory is a text file. Reading file paths from it...")
+        return pd.read_csv(data_dir, header=None)[0].tolist()
+
+    print("Data directory is a folder. Scanning for .pairs.gz or .pairs files...")
+    files = []
+    for pair in os.listdir(data_dir):
+        if pair.endswith(".pairs.gz") or pair.endswith(".pairs"):
+            files.append(os.path.join(data_dir, pair))
+    return files
+
 def stark_process(output_dir,
                   data_dir,
                   genome_reference_path,
@@ -69,12 +96,8 @@ def stark_process(output_dir,
     # depth
     depth_output_path = os.path.join(output_dir, "depth.txt")
     
-    # 1. 严格按照 os.listdir 的顺序收集文件路径
-    files_to_process = []
-    for pair in os.listdir(data_dir):
-        if pair.endswith(".pairs.gz") or pair.endswith(".pairs"):
-            pair_path = os.path.join(data_dir, pair)
-            files_to_process.append(pair_path)
+    # 1. 收集文件路径；txt/txt.gz 时严格按文件内顺序
+    files_to_process = _collect_pair_files(data_dir)
             
     # 2. 并行计算行数，executor.map 会自动保证输出结果列表与输入列表顺序严格一致
     if not os.path.exists(depth_output_path):
@@ -108,9 +131,12 @@ def stark_process(output_dir,
             temp_dir = os.path.join(output_dir, f"temp_{temp_res}")
             if not os.path.exists(temp_dir):
                 os.makedirs(temp_dir, exist_ok=True)
+            
+            real_data_dir = _resolve_data_dir(data_dir, temp_dir)
                 
             config = {
-                "data_dir": data_dir,
+                "data_dir": real_data_dir,
+                    "pair_files": files_to_process,
                     "temp_dir": temp_dir,
                     "structured": True,
                     "input_format": "higashi_v2",
@@ -156,9 +182,12 @@ def stark_process(output_dir,
         temp_dir = os.path.join(output_dir, f"temp_{resolution}")
         if not os.path.exists(temp_dir):
             os.makedirs(temp_dir, exist_ok=True)
+        
+        real_data_dir = _resolve_data_dir(data_dir, temp_dir)
             
         config = {
-            "data_dir": data_dir,
+            "data_dir": real_data_dir,
+                "pair_files": files_to_process,
                 "temp_dir": temp_dir,
                 "structured": True,
                 "input_format": "higashi_v2",

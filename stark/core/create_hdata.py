@@ -1,5 +1,5 @@
 import scanpy as sc
-from stark.core.hdata import HData
+from stark.core.hdata import HData, _make_view_key, MODALITY_HIC
 
 def create_hdata_from_adata(adata, 
                             data_dir=None, 
@@ -9,7 +9,8 @@ def create_hdata_from_adata(adata,
                             resolution=None):
     """
     从 AnnData 对象创建 HData 对象。
-    这个函数将 AnnData 中的 obs 和 embedding 数据提取出来，存储到 HData 中。
+    将 AnnData 中的 obs 和 embedding 数据提取出来，存储到 HData 中。
+    视图键格式为 "hic_<resolution>"。
     """
     
     if adata is None:
@@ -27,8 +28,6 @@ def create_hdata_from_adata(adata,
     if resolution is None or not resolution:
         raise ValueError("分辨率列表 (resolutions) 不能为空")
     
-    
-    
     hdata = HData(
         data_dir=data_dir,
         output_dir=output_dir,
@@ -36,14 +35,13 @@ def create_hdata_from_adata(adata,
         chrom_list=chrom_list,
         resolutions=resolution
     )
-    if isinstance(resolution, list):
-        res = resolution[0]
-    
-    hdata.views_pca[res] = adata.uns.get('X_pca', None)
-    hdata.views_umap[res] = adata.uns.get('X_umap', None)
-    
+
+    res = resolution[0] if isinstance(resolution, list) else resolution
+    vk = _make_view_key(MODALITY_HIC, res)
+
+    hdata.views_pca[vk]  = adata.uns.get('X_pca', None)
+    hdata.views_umap[vk] = adata.uns.get('X_umap', None)
     hdata.obs = adata.obs.copy()
 
-    
     return hdata
     

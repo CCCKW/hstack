@@ -19,3 +19,17 @@ benchmark/
 config/
 loop_pipeline/
 cycle_result_csv/
+*.pdf
+*.sh
+*.R
+*.r
+Ablation/
+config/
+fig3_gene/
+loop_pipeline/
+old_stark/
+schic2_mm9/
+snm3c_result_csv/
+cycle_h5ad/
+cycle_result_csv/
+snm3c_result_csv/

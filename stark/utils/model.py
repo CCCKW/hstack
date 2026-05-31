@@ -23,7 +23,7 @@ class MultiViewSEACells():
 
     变量语义:
         B: (N, K)  细胞->Metacell 归属矩阵，列稀疏(接近 one-hot)，表示每个 Metacell 的"代表点"定位
-        A: (K, N)  Metacell->细胞 聚合矩阵，列单纯形约束(sum_k A[k,n]=1)，表示每个细胞软分配到各 Metacell 的权重
+        A: (K, N)  Metacell->细胞 聚合矩阵，行归一化(行单纯形约束 sum_n A[k,n]=1)，表示每个 Metacell 由哪些细胞组成
 
     优化目标:
         L = sum_v w_v * ||M_v - M_v B A||_F^2
@@ -106,10 +106,16 @@ class MultiViewSEACells():
         self.kernels_computed = True
         return self
 
-    def initialize(self, n_threads=None, seed=None, data_type='views', n_micro_clusters=None):
+    def initialize(self, n_threads=None, seed=None, data_type='views', n_micro_clusters=None,
+                   init_method='minibatch_fps'):
         """
         步骤2: 初始化 (基于微簇)
         修正: 始终用 PCA 特征空间做聚类初始化，避免核矩阵列向量的维度灾难。
+
+        init_method 参数控制 waypoint 初始化策略:
+            'minibatch_fps' (默认): MiniBatchKMeans 微簇 + FPS 在质心上采样 (本算法)
+            'greedy_fps'          : 直接在所有细胞 PCA 特征上做贪心最远点采样 (SEACells 风格)
+            'random'              : 随机均匀采样 (基线)
         """
         if not self.kernels_computed:
             raise RuntimeError("请先运行 compute_kernels。")
@@ -118,65 +124,90 @@ class MultiViewSEACells():
             np.random.seed(seed)
 
         print("\n" + "=" * 60)
-        print(f"步骤2: 参数初始化 (Method: Micro-Clustering on PCA features)")
+        print(f"步骤2: 参数初始化 (Method: {init_method})")
         print("=" * 60)
 
         n_views = len(self.kernels)
         self.view_weights = np.ones(n_views) / n_views
 
-        # 修正: 始终使用 PCA 特征（views_data）做聚类，而非核矩阵列向量
-        # 核矩阵列维度为 N，多视图拼接后为 N*V，在大 N 下是高维稀疏向量，欧氏距离失效
         cluster_data = np.hstack(self.views_data)
 
-        if n_micro_clusters is None:
-            n_micro_clusters = int(self.n_metacells * 3.0)
+        # ---- 策略 1: 本算法默认 (MiniBatchKMeans 微簇 + FPS) ----
+        if init_method == 'minibatch_fps':
+            if n_micro_clusters is None:
+                n_micro_clusters = int(self.n_metacells * 3.0)
 
-        print(f"  执行 MiniBatchKMeans (k={n_micro_clusters})...")
-        kmeans = MiniBatchKMeans(
-            n_clusters=n_micro_clusters,
-            random_state=seed,
-            batch_size=1024,
-            n_init=3
-        ).fit(cluster_data)
+            print(f"  执行 MiniBatchKMeans (k={n_micro_clusters})...")
+            kmeans = MiniBatchKMeans(
+                n_clusters=n_micro_clusters,
+                random_state=seed,
+                batch_size=1024,
+                n_init=3
+            ).fit(cluster_data)
 
-        micro_labels = kmeans.labels_
-        centers = kmeans.cluster_centers_
+            micro_labels = kmeans.labels_
+            centers = kmeans.cluster_centers_
 
-        df_micro = pd.DataFrame({'label': micro_labels})
-        size_stats = df_micro['label'].value_counts()
-        min_micro_size = max(2, int(self.n_cells * 0.0005))
-        valid_labels = size_stats[size_stats >= min_micro_size].index.tolist()
+            df_micro = pd.DataFrame({'label': micro_labels})
+            size_stats = df_micro['label'].value_counts()
+            min_micro_size = max(2, int(self.n_cells * 0.0005))
+            valid_labels = size_stats[size_stats >= min_micro_size].index.tolist()
 
-        if len(valid_labels) < self.n_metacells:
-            print("  [警告] 有效微簇少于目标数，强制使用所有的簇。")
-            valid_labels = size_stats.index.tolist()
+            if len(valid_labels) < self.n_metacells:
+                print("  [警告] 有效微簇少于目标数，强制使用所有的簇。")
+                valid_labels = size_stats.index.tolist()
 
-        # 为了极大地保护稀有细胞，这里不能只选最大的 K 个微簇！
-        # 改用最远点采样 (Farthest Point Sampling, FPS) 来挑选高度多样的微簇
-        valid_centers = centers[valid_labels]
-        selected_indices = [0] # 先选最大的微簇作为第一个
-        
-        if len(valid_labels) > self.n_metacells:
-            min_dists = np.full(len(valid_labels), np.inf)
-            for i in range(1, self.n_metacells):
-                last_chosen = selected_indices[-1]
-                # 更新到所有未选点到已选集合的最小距离
-                dists_to_last = np.linalg.norm(valid_centers - valid_centers[last_chosen], axis=1)
+            # FPS 在微簇质心上选多样化的 K 个
+            valid_centers = centers[valid_labels]
+            selected_indices = [0]
+
+            if len(valid_labels) > self.n_metacells:
+                min_dists = np.full(len(valid_labels), np.inf)
+                for i in range(1, self.n_metacells):
+                    last_chosen = selected_indices[-1]
+                    dists_to_last = np.linalg.norm(valid_centers - valid_centers[last_chosen], axis=1)
+                    min_dists = np.minimum(min_dists, dists_to_last)
+                    next_chosen = np.argmax(min_dists)
+                    selected_indices.append(next_chosen)
+            else:
+                selected_indices = list(range(len(valid_labels)))
+
+            top_k_labels = [valid_labels[i] for i in selected_indices]
+            final_waypoints = []
+            for lbl in top_k_labels:
+                indices = np.where(micro_labels == lbl)[0]
+                dists = np.linalg.norm(cluster_data[indices] - centers[lbl], axis=1)
+                final_waypoints.append(indices[np.argmin(dists)])
+
+        # ---- 策略 2: 直接全局贪心 FPS (SEACells 风格, 在 PCA 空间) ----
+        elif init_method == 'greedy_fps':
+            print(f"  执行直接贪心 FPS (在 {cluster_data.shape[0]} 个细胞上)...")
+            n = self.n_cells
+            k = self.n_metacells
+            # 随机选第一个起点
+            first = np.random.randint(0, n)
+            selected = [first]
+            min_dists = np.full(n, np.inf)
+            min_dists[first] = 0.0
+            for _ in range(1, k):
+                last = selected[-1]
+                dists_to_last = np.linalg.norm(cluster_data - cluster_data[last], axis=1)
                 min_dists = np.minimum(min_dists, dists_to_last)
-                # 挑选最小距离中最大的那个点（最远点）
-                # 为了避免选到完全孤立的噪点（如 size=1），通过 min_micro_size 已做初步过滤
-                next_chosen = np.argmax(min_dists)
-                selected_indices.append(next_chosen)
-        else:
-            selected_indices = list(range(len(valid_labels)))
-            
-        top_k_labels = [valid_labels[i] for i in selected_indices]
+                next_pt = np.argmax(min_dists)
+                min_dists[next_pt] = 0.0
+                selected.append(next_pt)
+            final_waypoints = selected
 
-        final_waypoints = []
-        for lbl in top_k_labels:
-            indices = np.where(micro_labels == lbl)[0]
-            dists = np.linalg.norm(cluster_data[indices] - centers[lbl], axis=1)
-            final_waypoints.append(indices[np.argmin(dists)])
+        # ---- 策略 3: 随机均匀采样 (基线) ----
+        elif init_method == 'random':
+            print(f"  执行随机均匀采样...")
+            final_waypoints = list(
+                np.random.choice(self.n_cells, size=self.n_metacells, replace=False)
+            )
+
+        else:
+            raise ValueError(f"未知的 init_method: '{init_method}'，"
+                             f"请选择 'minibatch_fps'、'greedy_fps' 或 'random'。")
 
         self.waypoints = np.array(final_waypoints)
         print(f"  最终选中 {len(self.waypoints)} 个 Waypoints")
@@ -222,7 +253,7 @@ class MultiViewSEACells():
                 sizes = self.A.sum(axis=1)
                 print(f"Iter {iteration:3d} | Loss: {loss:.4f} | Size Range: {sizes.min():.1f}-{sizes.max():.1f} | weight: {self.view_weights}")
 
-            if self.adaptive_weight and iteration > int(self.max_iter * 0.3):
+            if self.adaptive_weight and iteration > int(iteration * 0.3):
                 self.view_weights = self._update_weights(
                     self.kernels, self.B, self.view_weights, self.weight_momentum, self.weight_method
                 )
@@ -432,7 +463,7 @@ class MultiViewSEACells():
             for i in range(n_views):
                 dists = [np.linalg.norm(MB_list[i] - MB_list[j]) for j in range(n_views) if i != j]
                 avg_distances[i] = np.mean(dists) if dists else 0.0
-            # 指数5：距离越大惩罚越重，快速拉开权重差异
+            # 修正: 指数2替代原来的10
             new_w = 1.0 / (avg_distances ** 5 + 1e-6)
             new_w /= new_w.sum()
             
