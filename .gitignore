@@ -26,8 +26,8 @@ cycle_result_csv/
 *.r
 Ablation/
 config/
+stark-6-3/
 fig3_gene/
-loop_pipeline/
 old_stark/
 schic2_mm9/
 snm3c_result_csv/
