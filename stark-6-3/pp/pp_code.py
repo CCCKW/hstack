@@ -62,7 +62,7 @@ def _resolve_data_dir(data_dir, temp_dir):
     files = pd.read_csv(data_dir, header=None)[0].tolist()
     for fp in files:
         dst = os.path.join(link_dir, os.path.basename(fp))
-        if not os.path.lexists(dst):
+        if not os.path.exists(dst):
             os.symlink(os.path.abspath(fp), dst)
     return link_dir
 

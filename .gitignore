@@ -21,6 +21,7 @@ loop_pipeline/
 cycle_result_csv/
 *.pdf
 *.sh
+*.cool
 *.R
 *.r
 Ablation/
@@ -33,3 +34,4 @@ snm3c_result_csv/
 cycle_h5ad/
 cycle_result_csv/
 snm3c_result_csv/
+mustache_cycle_loops/
